@@ -14,6 +14,27 @@
         }
         .content-section { display: none; }
         .content-section.active { display: block; }
+        /* Custom modal overlay styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 50;
+        }
+        .modal-content {
+            background: white;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+            width: 90%;
+            max-width: 400px;
+        }
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
@@ -22,7 +43,8 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, query, onSnapshot, doc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // NOTE: Added 'deleteDoc' and 'updateDoc' for full CRUD
+        import { getFirestore, collection, query, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- HARDCODED CONFIGURATION (YOUR CONFIG) ---
         const YOUR_FIREBASE_CONFIG = {
@@ -51,16 +73,31 @@
 
         // --- Core Session Check ---
         if (!userRole || !userKey) {
-            // The user must be authenticated and have a role key to proceed
             window.location.href = 'index.html';
+            return;
         }
 
         const userInfoElement = document.getElementById('user-info');
         const welcomeMessageElement = document.getElementById('welcome-message');
-        const dashboardContent = document.getElementById('dashboard-content');
         const sectionButtons = document.querySelectorAll('.tab-button');
         const contentSections = document.querySelectorAll('.content-section');
         const inventoryTableBody = document.getElementById('inventory-table-body');
+
+        // New DOM elements for toggling forms
+        const appointmentsListContainer = document.getElementById('appointments-list-container');
+        const newAppointmentFormContainer = document.getElementById('new-appointment-form-container');
+        const newAppointmentForm = document.getElementById('new-appointment-form');
+
+        const patientsListContainer = document.getElementById('patients-list-container');
+        const newPatientFormContainer = document.getElementById('new-patient-form-container');
+        const newPatientForm = document.getElementById('new-patient-form');
+        
+        // Inventory Update Modal Elements
+        const inventoryEditModal = document.getElementById('inventory-edit-modal');
+        const inventoryEditForm = document.getElementById('inventory-edit-form');
+        const inventoryItemName = document.getElementById('inventory-item-name');
+        const inventoryDocId = document.getElementById('inventory-doc-id');
+
 
         // --- UI RENDER FUNCTIONS ---
         function renderUserInfo() {
@@ -68,6 +105,17 @@
             welcomeMessageElement.textContent = `Welcome back, ${userName}!`;
         }
 
+        // Function to toggle between list and form view within a section
+        function toggleView(listContainer, formContainer, showForm = false) {
+            if (showForm) {
+                listContainer.classList.add('hidden');
+                formContainer.classList.remove('hidden');
+            } else {
+                listContainer.classList.remove('hidden');
+                formContainer.classList.add('hidden');
+            }
+        }
+        
         function switchSection(sectionId) {
             // Update buttons
             sectionButtons.forEach(btn => {
@@ -85,12 +133,187 @@
                     // Load data for the active section
                     if (sectionId === 'inventory') {
                         loadInventory();
+                    } else if (sectionId === 'appointments') {
+                        loadAppointments();
+                        toggleView(appointmentsListContainer, newAppointmentFormContainer, false);
+                    } else if (sectionId === 'patients') {
+                        loadPatients();
+                        toggleView(patientsListContainer, newPatientFormContainer, false);
                     }
                 }
             });
         }
 
-        // --- DATA LOADERS (Firestore) ---
+        // --- CRUD Functions (CREATE) ---
+
+        async function addAppointment(event) {
+            event.preventDefault();
+            const patientName = document.getElementById('appointment-patient-name').value;
+            const date = document.getElementById('appointment-date').value;
+            const time = document.getElementById('appointment-time').value;
+            
+            if (!patientName || !date || !time) return;
+
+            try {
+                await addDoc(collection(db, `artifacts/${appId}/public/data/appointments`), {
+                    patientName,
+                    dateTime: new Date(`${date}T${time}`),
+                    status: 'Scheduled',
+                    bookedBy: userName,
+                    createdAt: serverTimestamp()
+                });
+                newAppointmentForm.reset();
+                toggleView(appointmentsListContainer, newAppointmentFormContainer, false); 
+            } catch (e) {
+                console.error("Error adding appointment:", e);
+                document.getElementById('appointment-status-msg').textContent = 'ERROR: Could not book appointment.';
+            }
+        }
+
+        async function addPatient(event) {
+            event.preventDefault();
+            const name = document.getElementById('patient-name').value;
+            const dob = document.getElementById('patient-dob').value;
+            const phone = document.getElementById('patient-phone').value;
+            
+            if (!name || !dob || !phone) return;
+
+            try {
+                await addDoc(collection(db, `artifacts/${appId}/public/data/patients`), {
+                    name,
+                    dob,
+                    phone,
+                    recordStatus: 'Active',
+                    registeredBy: userName,
+                    createdAt: serverTimestamp()
+                });
+                newPatientForm.reset();
+                toggleView(patientsListContainer, newPatientFormContainer, false); 
+            } catch (e) {
+                console.error("Error adding patient:", e);
+                document.getElementById('patient-status-msg').textContent = 'ERROR: Could not add patient record.';
+            }
+        }
+        
+        // --- CRUD Functions (UPDATE) ---
+
+        function openInventoryEdit(docId, name, quantity, price) {
+            inventoryItemName.textContent = name;
+            inventoryDocId.value = docId;
+            document.getElementById('inventory-update-quantity').value = quantity;
+            document.getElementById('inventory-update-price').value = price;
+            inventoryEditModal.classList.remove('hidden');
+        }
+
+        async function updateInventory(event) {
+            event.preventDefault();
+            const docId = inventoryDocId.value;
+            const quantity = parseInt(document.getElementById('inventory-update-quantity').value);
+            const price = parseFloat(document.getElementById('inventory-update-price').value);
+
+            if (!docId || isNaN(quantity) || isNaN(price)) return;
+
+            try {
+                const docRef = doc(db, `artifacts/${appId}/public/data/inventory`, docId);
+                await updateDoc(docRef, {
+                    quantity: quantity,
+                    price: price,
+                    lastUpdated: serverTimestamp()
+                });
+                inventoryEditModal.classList.add('hidden');
+                document.getElementById('inventory-edit-status').textContent = 'SUCCESS: Inventory item updated!';
+                setTimeout(() => document.getElementById('inventory-edit-status').textContent = '', 3000);
+            } catch (e) {
+                console.error("Error updating inventory:", e);
+                document.getElementById('inventory-edit-status').textContent = 'ERROR: Could not update inventory.';
+            }
+        }
+
+        // --- CRUD Functions (DELETE) ---
+
+        async function deleteDocument(collectionName, docId) {
+            try {
+                const docRef = doc(db, `artifacts/${appId}/public/data/${collectionName}`, docId);
+                await deleteDoc(docRef);
+                // The UI will automatically update due to onSnapshot
+            } catch (e) {
+                console.error(`Error deleting document from ${collectionName}:`, e);
+                alert('ERROR: Could not delete document. Check console for details.');
+            }
+        }
+
+        // --- DATA LOADERS (READ) ---
+
+        function loadAppointments() {
+            const appointmentsCollectionRef = collection(db, `artifacts/${appId}/public/data/appointments`);
+            const q = query(appointmentsCollectionRef); 
+
+            onSnapshot(q, (snapshot) => {
+                let html = '';
+                if (snapshot.empty) {
+                     html = `<tr><td colspan="5" class="text-center py-4 text-gray-500">No appointments scheduled today.</td></tr>`;
+                } else {
+                    snapshot.forEach((doc) => {
+                        const appointment = doc.data();
+                        const docId = doc.id;
+                        const date = appointment.dateTime.toDate ? appointment.dateTime.toDate().toLocaleString() : 'N/A';
+                        const statusClass = appointment.status === 'Scheduled' ? 'bg-yellow-100 text-yellow-800' : (appointment.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800');
+                        
+                        html += `
+                            <tr class="border-b hover:bg-gray-50">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${appointment.patientName}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${date}</td>
+                                <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">${appointment.status}</span></td>
+                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                    <button data-id="${docId}" data-action="manage-appointment" class="text-indigo-600 hover:text-indigo-900 px-2 py-1 rounded-md hover:bg-indigo-50">Manage (U)</button>
+                                    <button data-id="${docId}" data-action="delete-appointment" class="text-red-600 hover:text-red-900 px-2 py-1 rounded-md hover:bg-red-50 ml-2">Delete (D)</button>
+                                </td>
+                            </tr>
+                        `;
+                    });
+                }
+                document.getElementById('appointments-list').innerHTML = html;
+
+            }, (error) => {
+                console.error("Error loading appointments:", error);
+                document.getElementById('appointments-list').innerHTML = `<tr><td colspan="5" class="text-center py-4 text-red-500">Failed to load appointments.</td></tr>`;
+            });
+        }
+
+        function loadPatients() {
+            const patientsCollectionRef = collection(db, `artifacts/${appId}/public/data/patients`);
+            const q = query(patientsCollectionRef);
+
+            onSnapshot(q, (snapshot) => {
+                let html = '';
+                if (snapshot.empty) {
+                    html = `<tr><td colspan="5" class="text-center py-4 text-gray-500">No patient records found.</td></tr>`;
+                } else {
+                    snapshot.forEach((doc) => {
+                        const patient = doc.data();
+                        const docId = doc.id;
+                        const statusClass = patient.recordStatus === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800';
+                        
+                        html += `
+                            <tr class="border-b hover:bg-gray-50">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${patient.name}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${patient.dob}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${patient.phone}</td>
+                                <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">${patient.recordStatus}</span></td>
+                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                    <button data-id="${docId}" data-action="view-history" class="text-indigo-600 hover:text-indigo-900 px-2 py-1 rounded-md hover:bg-indigo-50">View History (U)</button>
+                                    <button data-id="${docId}" data-action="delete-patient" class="text-red-600 hover:text-red-900 px-2 py-1 rounded-md hover:bg-red-50 ml-2">Delete (D)</button>
+                                </td>
+                            </tr>
+                        `;
+                    });
+                }
+                document.getElementById('patients-list').innerHTML = html;
+            }, (error) => {
+                console.error("Error loading patients:", error);
+                document.getElementById('patients-list').innerHTML = `<tr><td colspan="5" class="text-center py-4 text-red-500">Failed to load patient records.</td></tr>`;
+            });
+        }
 
         function loadInventory() {
             const inventoryCollectionRef = collection(db, `artifacts/${appId}/public/data/inventory`);
@@ -101,22 +324,73 @@
                 let html = '';
                 snapshot.forEach((doc) => {
                     const item = doc.data();
+                    const docId = doc.id; // Get document ID for update/delete
+                    
+                    // Action column: Edit button visible only to Admin
+                    const adminActions = userRole === 'admin' ? 
+                        `<button 
+                            data-id="${docId}" 
+                            data-action="open-inventory-edit" 
+                            data-name="${item.name}" 
+                            data-quantity="${item.quantity}" 
+                            data-price="${item.price}" 
+                            class="text-indigo-600 hover:text-indigo-900 px-2 py-1 rounded-md hover:bg-indigo-50"
+                        >Edit (U)</button>` : '';
+
                     html += `
                         <tr class="border-b hover:bg-gray-50">
                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.name}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.unit}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.quantity}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$${item.price}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">PESOS ${item.price}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">${adminActions}</td>
                         </tr>
                     `;
                 });
                 inventoryTableBody.innerHTML = html;
             }, (error) => {
                 console.error("Error loading inventory:", error);
-                inventoryTableBody.innerHTML = `<tr><td colspan="4" class="text-center py-4 text-red-500">Failed to load inventory: Check Firestore Rules.</td></tr>`;
+                inventoryTableBody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-red-500">Failed to load inventory: Check Firestore Rules.</td></tr>`;
             });
         }
         
+        // --- Event Delegation for CRUD Actions ---
+        function setupGlobalListeners() {
+            document.addEventListener('click', (event) => {
+                const target = event.target;
+                const action = target.dataset.action;
+                const docId = target.dataset.id;
+
+                if (!action || !docId) return;
+
+                if (action === 'delete-appointment') {
+                    // Custom Alert Confirmation (cannot use native confirm)
+                    if (window.confirm("Confirm deletion of this Appointment?")) {
+                        deleteDocument('appointments', docId);
+                    }
+                } else if (action === 'delete-patient') {
+                    if (window.confirm("Confirm permanent deletion of this Patient Record?")) {
+                        deleteDocument('patients', docId);
+                    }
+                } else if (action === 'open-inventory-edit' && userRole === 'admin') {
+                    // Open the Update Modal for Inventory
+                    const name = target.dataset.name;
+                    const quantity = target.dataset.quantity;
+                    const price = target.dataset.price;
+                    openInventoryEdit(docId, name, quantity, price);
+                }
+            });
+
+            // Inventory Update Form Submission
+            inventoryEditForm.addEventListener('submit', updateInventory);
+
+            // Close Inventory Update Modal
+            document.getElementById('cancel-inventory-update').addEventListener('click', () => {
+                inventoryEditModal.classList.add('hidden');
+                document.getElementById('inventory-edit-status').textContent = '';
+            });
+        }
+
         // --- Initialization ---
 
         function initFirebaseAndDashboard() {
@@ -129,19 +403,30 @@
                 // Re-authenticate or confirm existing session
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
-                        // Firebase session confirmed. Now render UI.
                         renderUserInfo();
+                        setupGlobalListeners(); // Set up global action listeners
                         
                         // Set up navigation and initial view
                         sectionButtons.forEach(btn => {
-                            btn.addEventListener('click', () => switchSection(btn.dataset.section));
+                            btn.addEventListener('click', () => {
+                                const sectionId = btn.dataset.section;
+                                switchSection(sectionId);
+                            });
                         });
-
-                        // Set default view to Inventory
-                        switchSection('inventory'); 
                         
+                        // Set default view to Appointments
+                        switchSection('appointments'); 
+
+                        // Attach form listeners and toggles for CRUD
+                        document.getElementById('new-appointment-form').addEventListener('submit', addAppointment);
+                        document.getElementById('new-appointment-btn').addEventListener('click', () => toggleView(appointmentsListContainer, newAppointmentFormContainer, true));
+                        document.getElementById('cancel-appointment-btn').addEventListener('click', () => toggleView(appointmentsListContainer, newAppointmentFormContainer, false));
+                        
+                        document.getElementById('new-patient-form').addEventListener('submit', addPatient);
+                        document.getElementById('new-patient-btn').addEventListener('click', () => toggleView(patientsListContainer, newPatientFormContainer, true));
+                        document.getElementById('cancel-patient-btn').addEventListener('click', () => toggleView(patientsListContainer, newPatientFormContainer, false));
+
                     } else {
-                        // Auth session lost, redirect to log in
                         console.log("Session expired, redirecting.");
                         window.location.href = 'index.html';
                     }
@@ -149,7 +434,6 @@
 
             } catch (e) {
                 console.error("Dashboard Firebase initialization failed:", e);
-                // Redirect if initialization fails to prevent a stuck page
                 window.location.href = 'index.html';
             }
         }
@@ -195,35 +479,84 @@
     <main class="flex-grow container mx-auto p-6">
         
         <!-- ============================================== -->
-        <!-- SECTION: APPOINTMENTS -->
+        <!-- SECTION: APPOINTMENTS (C/R/U/D) -->
         <!-- ============================================== -->
-        <section id="appointments" class="content-section">
+        <section id="appointments" class="content-section active">
             <h3 class="text-2xl font-bold text-indigo-700 mb-4">Appointments Schedule</h3>
-            <div class="bg-white p-6 rounded-xl shadow-lg">
-                <p class="text-gray-500">Feature: Display and manage scheduled appointments here.</p>
-                <div class="mt-4 p-4 bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 rounded-md">
-                    Upcoming appointments will load from the Firestore `appointments` collection.
+
+            <!-- Appointment List View (Read/Delete) -->
+            <div id="appointments-list-container" class="bg-white p-6 rounded-xl shadow-lg">
+                <div class="flex justify-between items-center mb-4">
+                    <p class="text-gray-600 font-medium">Today's Scheduled Appointments (Delete implemented)</p>
+                    <button id="new-appointment-btn" class="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200">
+                        + New Appointment (Create)
+                    </button>
                 </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Patient</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date & Time</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions (U/D)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="appointments-list" class="bg-white divide-y divide-gray-200">
+                            <tr><td colspan="4" class="text-center py-4 text-indigo-500 animate-pulse">Loading appointments...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- New Appointment Form (Create) -->
+            <div id="new-appointment-form-container" class="hidden bg-white p-6 rounded-xl shadow-lg">
+                <h4 class="text-xl font-semibold text-indigo-700 mb-4">Book New Appointment</h4>
+                <form id="new-appointment-form">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="appointment-patient-name" class="block text-sm font-medium text-gray-700">Patient Name</label>
+                            <input type="text" id="appointment-patient-name" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="appointment-date" class="block text-sm font-medium text-gray-700">Date</label>
+                            <input type="date" id="appointment-date" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="appointment-time" class="block text-sm font-medium text-gray-700">Time</label>
+                            <input type="time" id="appointment-time" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                    </div>
+                    <p id="appointment-status-msg" class="text-sm text-red-500 mt-2"></p>
+                    <div class="mt-6 flex space-x-3 justify-end">
+                        <button type="button" id="cancel-appointment-btn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg font-semibold transition-colors duration-200">
+                            Cancel
+                        </button>
+                        <button type="submit" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200">
+                            Schedule Appointment
+                        </button>
+                    </div>
+                </form>
             </div>
         </section>
 
         <!-- ============================================== -->
-        <!-- SECTION: CONSULTATION -->
+        <!-- SECTION: CONSULTATION (Update Core Logic) -->
         <!-- ============================================== -->
         <section id="consultation" class="content-section">
             <h3 class="text-2xl font-bold text-indigo-700 mb-4">Patient Consultation</h3>
             <div class="bg-white p-6 rounded-xl shadow-lg">
-                <p class="text-gray-500">Feature: Start a new consultation, record vitals, and issue prescriptions using inventory data.</p>
+                <p class="text-gray-500">Feature: Start a new consultation, record vitals, issue prescriptions, and save the consultation record.</p>
                 <div class="mt-4 p-4 bg-blue-100 border-l-4 border-blue-500 text-blue-700 rounded-md">
-                    This section will integrate with the **Patients** and **Inventory** data.
+                    This section represents the **Update** logic, where a new medical entry is written to an existing patient's record.
                 </div>
             </div>
         </section>
 
         <!-- ============================================== -->
-        <!-- SECTION: INVENTORY (Live Firestore Data) -->
+        <!-- SECTION: INVENTORY (R/U Implemented) -->
         <!-- ============================================== -->
-        <section id="inventory" class="content-section active">
+        <section id="inventory" class="content-section">
             <h3 class="text-2xl font-bold text-indigo-700 mb-4">Inventory & Stock</h3>
             <div class="bg-white rounded-xl shadow-lg overflow-hidden">
                 <table class="min-w-full divide-y divide-gray-200">
@@ -232,13 +565,14 @@
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Medicine Name</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price (PHP)</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price (PESOS)</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Action (U)</th>
                         </tr>
                     </thead>
                     <tbody id="inventory-table-body" class="bg-white divide-y divide-gray-200">
                         <!-- Inventory data will be loaded here by JavaScript -->
                         <tr>
-                            <td colspan="4" class="text-center py-8 text-indigo-500 animate-pulse">Loading 50 medicine items...</td>
+                            <td colspan="5" class="text-center py-8 text-indigo-500 animate-pulse">Loading medicine items...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -246,15 +580,65 @@
         </section>
 
         <!-- ============================================== -->
-        <!-- SECTION: PATIENTS -->
+        <!-- SECTION: PATIENTS (C/R/D) -->
         <!-- ============================================== -->
         <section id="patients" class="content-section">
             <h3 class="text-2xl font-bold text-indigo-700 mb-4">Patient Records</h3>
-            <div class="bg-white p-6 rounded-xl shadow-lg">
-                <p class="text-gray-500">Feature: Search and manage patient demographic and medical history.</p>
-                <div class="mt-4 p-4 bg-green-100 border-l-4 border-green-500 text-green-700 rounded-md">
-                    Patient data will load from the Firestore `patients` collection.
+
+            <!-- Patient List View (Read/Delete) -->
+            <div id="patients-list-container" class="bg-white p-6 rounded-xl shadow-lg">
+                <div class="flex justify-between items-center mb-4">
+                    <p class="text-gray-600 font-medium">Clinic Patient List (Delete implemented)</p>
+                    <button id="new-patient-btn" class="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200">
+                        + New Patient (Create)
+                    </button>
                 </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">DOB</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Phone</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions (U/D)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="patients-list" class="bg-white divide-y divide-gray-200">
+                            <tr><td colspan="5" class="text-center py-4 text-indigo-500 animate-pulse">Loading patient records...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- New Patient Form (Create) -->
+            <div id="new-patient-form-container" class="hidden bg-white p-6 rounded-xl shadow-lg">
+                <h4 class="text-xl font-semibold text-indigo-700 mb-4">Register New Patient</h4>
+                <form id="new-patient-form">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label for="patient-name" class="block text-sm font-medium text-gray-700">Full Name</label>
+                            <input type="text" id="patient-name" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="patient-dob" class="block text-sm font-medium text-gray-700">Date of Birth</label>
+                            <input type="date" id="patient-dob" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label for="patient-phone" class="block text-sm font-medium text-gray-700">Phone Number</label>
+                            <input type="tel" id="patient-phone" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                    </div>
+                    <p id="patient-status-msg" class="text-sm text-red-500 mt-2"></p>
+                    <div class="mt-6 flex space-x-3 justify-end">
+                        <button type="button" id="cancel-patient-btn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg font-semibold transition-colors duration-200">
+                            Cancel
+                        </button>
+                        <button type="submit" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200">
+                            Register Patient
+                        </button>
+                    </div>
+                </form>
             </div>
         </section>
 
@@ -266,21 +650,58 @@
             <div class="bg-white p-6 rounded-xl shadow-lg">
                 <p class="text-gray-500">Feature: Generate sales reports, staff usage logs, and inventory turnover reports.</p>
                 <div class="mt-4 p-4 bg-red-100 border-l-4 border-red-500 text-red-700 rounded-md">
-                    Access to this section must be enforced by both the UI (disabled button) and Firestore Security Rules.
+                    This section is Read-only (R) for aggregate data and requires Admin access.
                 </div>
             </div>
         </section>
 
         <script>
             // Enable the Reports tab only for the Admin
-            if (userRole === 'admin') {
+            const userRoleCheck = sessionStorage.getItem('clinic_user_role');
+            if (userRoleCheck === 'admin') {
                 document.getElementById('reports-tab').disabled = false;
                 document.getElementById('reports-tab').title = '';
             } else {
-                // Remove the Reports content section for non-admins for cleanliness
-                document.getElementById('reports').remove();
+                const reportsElement = document.getElementById('reports');
+                if (reportsElement) reportsElement.remove();
+                
+                const reportsTab = document.getElementById('reports-tab');
+                if (reportsTab) reportsTab.remove();
             }
         </script>
     </main>
+
+    <!-- ============================================== -->
+    <!-- INVENTORY UPDATE MODAL (Custom UI for Update) -->
+    <!-- ============================================== -->
+    <div id="inventory-edit-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h4 class="text-xl font-semibold text-indigo-700 mb-4">Update Stock: <span id="inventory-item-name" class="font-bold"></span></h4>
+            <form id="inventory-edit-form">
+                <input type="hidden" id="inventory-doc-id">
+                
+                <div class="mb-4">
+                    <label for="inventory-update-quantity" class="block text-sm font-medium text-gray-700">New Quantity in Stock</label>
+                    <input type="number" id="inventory-update-quantity" required min="0" class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+
+                <div class="mb-4">
+                    <label for="inventory-update-price" class="block text-sm font-medium text-gray-700">New Price (PESOS)</label>
+                    <input type="number" step="0.01" id="inventory-update-price" required min="0" class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+                
+                <p id="inventory-edit-status" class="text-sm text-center font-medium text-green-600 mb-4"></p>
+
+                <div class="mt-6 flex space-x-3 justify-end">
+                    <button type="button" id="cancel-inventory-update" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg font-semibold transition-colors duration-200">
+                        Cancel
+                    </button>
+                    <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200">
+                        Save Changes
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 </body>
 </html>
