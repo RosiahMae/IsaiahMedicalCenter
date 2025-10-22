@@ -3,598 +3,927 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Clinic System Dashboard</title>
+    <title>Clinic Dashboard</title>
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script type="module">
-        // Import Firebase modules
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs, runTransaction, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Global Firebase and App variables
-        let app;
-        let db;
-        let auth;
-        let userId = 'unknown'; // Will be set after successful authentication
-        let appId = 'default-app-id';
-        let isAuthReady = false;
-
-        // Current user's role (defaults to Guest)
-        let currentUserRole = 'Guest';
-
-        // State for managing UI tabs
-        let activeTab = 'Patients';
-
-        // --- Utility Functions ---
-
-        /** Generates a firestore path for public data */
-        const getPublicCollectionRef = (collectionName) => {
-            if (!db) return null;
-            return collection(db, `artifacts/${appId}/public/data/${collectionName}`);
-        };
-
-        /** Fetches the current user's role (using a simple public collection for roles) */
-        const fetchUserRole = async (uid) => {
-            const userDocRef = doc(getPublicCollectionRef('roles'), uid);
-            try {
-                const docSnap = await getDoc(userDocRef);
-                // Assign Nurse role for demonstration if user is anonymous or new
-                return docSnap.exists() ? docSnap.data().role : 'Nurse'; 
-            } catch (e) {
-                console.error("Error fetching user role:", e);
-                return 'Guest';
-            }
-        };
-
-        /** Shows a custom message box instead of alert() */
-        const showMessage = (title, message, type = 'info') => {
-            const modal = document.getElementById('message-modal');
-            document.getElementById('modal-title').textContent = title;
-            document.getElementById('modal-message').textContent = message;
-
-            const titleElement = document.getElementById('modal-title');
-            titleElement.className = 'text-xl font-semibold mb-2';
-            if (type === 'error') {
-                titleElement.classList.add('text-red-600');
-            } else if (type === 'success') {
-                titleElement.classList.add('text-green-600');
-            } else {
-                titleElement.classList.add('text-blue-600');
-            }
-
-            modal.classList.remove('hidden');
-        };
-
-        const hideMessage = () => {
-            document.getElementById('message-modal').classList.add('hidden');
-        };
-
-        // --- Core Application Logic ---
-
-        /** Initializes the dashboard after successful authentication */
-        const initializeDashboard = async (appId, uid) => {
-            console.log(`Dashboard initializing for UID: ${uid} in App: ${appId}`);
-
-            // 1. Fetch the user's role
-            currentUserRole = await fetchUserRole(uid);
-            document.getElementById('current-role').textContent = `Role: ${currentUserRole}`;
-
-            // 2. Set up initial UI based on role
-            renderNavigation();
-            
-            // 3. Start real-time data listeners
-            setupRealtimeListeners();
-
-            // 4. Default to the appropriate view
-            switchTab(currentUserRole === 'Admin' ? 'Inventory' : 'Patients');
-        };
-        
-        /** Sets up all Firestore real-time listeners */
-        const setupRealtimeListeners = () => {
-            // Patients Listener
-            onSnapshot(getPublicCollectionRef('patients'), (snapshot) => {
-                const patients = [];
-                snapshot.forEach(doc => patients.push({ id: doc.id, ...doc.data() }));
-                renderPatients(patients);
-            }, (error) => console.error("Patients snapshot failed:", error));
-
-            // Inventory Listener
-            onSnapshot(getPublicCollectionRef('inventory'), (snapshot) => {
-                const items = [];
-                snapshot.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
-                renderInventory(items);
-            }, (error) => console.error("Inventory snapshot failed:", error));
-
-            // Consultations Listener (Show recent 5 for a simple view)
-            onSnapshot(query(getPublicCollectionRef('consultations')), (snapshot) => {
-                const consultations = [];
-                snapshot.forEach(doc => consultations.push({ id: doc.id, ...doc.data() }));
-                renderConsultations(consultations);
-            }, (error) => console.error("Consultations snapshot failed:", error));
-        };
-
-        // --- Data Manipulation Functions (CRUD) ---
-
-        /** Adds a new patient (Nurse/Admin function) */
-        const addPatient = async (name, dob, contact) => {
-            if (currentUserRole === 'Guest') {
-                showMessage('Access Denied', 'Only authenticated users can add patients.', 'error');
-                return;
-            }
-            try {
-                await addDoc(getPublicCollectionRef('patients'), {
-                    name,
-                    dob,
-                    contact,
-                    admissionDate: new Date().toISOString(),
-                    status: 'Admitted'
-                });
-                showMessage('Success', `Patient ${name} admitted successfully.`, 'success');
-                document.getElementById('patient-form').reset();
-            } catch (e) {
-                console.error("Error adding patient:", e);
-                showMessage('Error', 'Failed to admit patient. Check console for details.', 'error');
-            }
-        };
-
-        /** Updates the status of a patient */
-        const updatePatientStatus = async (patientId, newStatus) => {
-            if (!['Admin', 'Nurse'].includes(currentUserRole)) {
-                showMessage('Access Denied', 'You do not have permission to update patient status.', 'error');
-                return;
-            }
-            try {
-                const docRef = doc(getPublicCollectionRef('patients'), patientId);
-                await updateDoc(docRef, { status: newStatus });
-                showMessage('Success', `Patient ${patientId.substring(0, 5)} status updated to ${newStatus}.`, 'success');
-            } catch (e) {
-                console.error("Error updating patient status:", e);
-                showMessage('Error', 'Failed to update patient status.', 'error');
-            }
-        };
-
-        /** Adds a consultation for a patient */
-        const addConsultation = async (patientId, patientName, notes) => {
-            if (!['Admin', 'Nurse'].includes(currentUserRole)) {
-                showMessage('Access Denied', 'You do not have permission to record consultations.', 'error');
-                return;
-            }
-            try {
-                await addDoc(getPublicCollectionRef('consultations'), {
-                    patientId,
-                    patientName,
-                    notes,
-                    recordedBy: userId,
-                    timestamp: new Date().toISOString(),
-                    status: 'Completed' 
-                });
-                showMessage('Success', `Consultation recorded for ${patientName}.`, 'success');
-                document.getElementById('consultation-notes').value = '';
-            } catch (e) {
-                console.error("Error recording consultation:", e);
-                showMessage('Error', 'Failed to record consultation. Check console for details.', 'error');
-            }
-        };
-
-        /** Updates inventory stock (Admin function) */
-        const updateInventoryStock = async (itemId, change) => {
-            if (currentUserRole !== 'Admin') {
-                showMessage('Access Denied', 'Only Admins can update inventory.', 'error');
-                return;
-            }
-
-            const itemRef = doc(getPublicCollectionRef('inventory'), itemId);
-
-            try {
-                await runTransaction(db, async (transaction) => {
-                    const itemDoc = await transaction.get(itemRef);
-                    if (!itemDoc.exists()) {
-                        throw new Error("Item does not exist!");
-                    }
-                    const newStock = (itemDoc.data().stock || 0) + change;
-                    if (newStock < 0) {
-                         throw new Error("Stock cannot be negative.");
-                    }
-                    transaction.update(itemRef, { stock: newStock });
-                });
-                showMessage('Success', `Stock for ${itemId.substring(0, 5)} updated.`, 'success');
-            } catch (e) {
-                console.error("Error updating inventory:", e);
-                showMessage('Error', `Failed to update inventory: ${e.message}`, 'error');
-            }
-        };
-
-        // --- UI Rendering ---
-
-        /** Renders the tab navigation based on the user's role */
-        const renderNavigation = () => {
-            const tabs = [
-                { id: 'Patients', label: 'Patients', roles: ['Admin', 'Nurse', 'Guest'] },
-                { id: 'Consultations', label: 'Consultations', roles: ['Admin', 'Nurse'] },
-                { id: 'Inventory', label: 'Inventory Management', roles: ['Admin', 'Nurse'] },
-            ];
-
-            const navContainer = document.getElementById('tab-navigation');
-            navContainer.innerHTML = '';
-
-            tabs.filter(tab => tab.roles.includes(currentUserRole))
-                .forEach(tab => {
-                    const button = document.createElement('button');
-                    button.textContent = tab.label;
-                    button.onclick = () => switchTab(tab.id);
-                    
-                    const baseClasses = 'px-4 py-2 rounded-t-lg font-medium transition-colors duration-200';
-                    const activeClasses = 'bg-white border-t border-x border-blue-500 text-blue-700';
-                    const inactiveClasses = 'bg-gray-100 hover:bg-gray-200 text-gray-600';
-
-                    button.className = activeTab === tab.id ? `${baseClasses} ${activeClasses}` : `${baseClasses} ${inactiveClasses}`;
-                    navContainer.appendChild(button);
-                });
-        };
-
-        /** Switches the content panel */
-        const switchTab = (tabId) => {
-            activeTab = tabId;
-            renderNavigation(); 
-
-            const panels = document.querySelectorAll('.tab-panel');
-            panels.forEach(panel => panel.classList.add('hidden'));
-
-            document.getElementById(`panel-${tabId}`).classList.remove('hidden');
-
-            if (tabId === 'Inventory') {
-                checkAndSeedInventory();
-            }
-        };
-
-        /** Renders the list of patients */
-        const renderPatients = (patients) => {
-            const container = document.getElementById('patients-list');
-            container.innerHTML = '';
-            
-            patients.sort((a, b) => new Date(b.admissionDate) - new Date(a.admissionDate)).forEach(p => {
-                const statusColor = p.status === 'Discharged' ? 'bg-green-100 text-green-700' : 
-                                    p.status === 'Admitted' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
-                
-                // Show actions only to authorized users
-                const actionsHtml = ['Admin', 'Nurse'].includes(currentUserRole) ? `
-                        <div class="mt-3 flex space-x-2">
-                            <button onclick="updatePatientStatus('${p.id}', 'Discharged')" class="text-xs px-2 py-1 bg-green-500 text-white rounded-md hover:bg-green-600">Discharge</button>
-                            <button onclick="updatePatientStatus('${p.id}', 'Critical')" class="text-xs px-2 py-1 bg-red-500 text-white rounded-md hover:bg-red-600">Critical</button>
-                            <button onclick="document.getElementById('patient-id-consultation').value='${p.id}'; document.getElementById('patient-name-consultation').value='${p.name}'; switchTab('Consultations')" class="text-xs px-2 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600">Add Consultation</button>
-                        </div>` : '';
-
-                const patientCard = `
-                    <div class="bg-white p-4 rounded-lg shadow-md border-l-4 border-blue-500 mb-3">
-                        <div class="flex justify-between items-center">
-                            <p class="font-bold text-lg">${p.name} <span class="text-sm text-gray-500 ml-2">(ID: ${p.id.substring(0, 5)})</span></p>
-                            <span class="px-3 py-1 text-xs font-semibold rounded-full ${statusColor}">${p.status}</span>
-                        </div>
-                        <p class="text-sm text-gray-600 mt-1">DOB: ${p.dob} | Contact: ${p.contact}</p>
-                        <p class="text-xs text-gray-500">Admitted: ${new Date(p.admissionDate).toLocaleDateString()}</p>
-                        ${actionsHtml}
-                    </div>
-                `;
-                container.innerHTML += patientCard;
-            });
-
-            if (patients.length === 0) {
-                 container.innerHTML = '<p class="text-center text-gray-400 p-8">No patients currently admitted.</p>';
-            }
-        };
-
-        /** Renders the list of consultations */
-        const renderConsultations = (consultations) => {
-            const container = document.getElementById('consultations-list');
-            container.innerHTML = '';
-
-            if (consultations.length === 0) {
-                 container.innerHTML = '<p class="text-gray-500 p-4">No consultations recorded yet.</p>';
-                 return;
-            }
-            
-            consultations.forEach(c => {
-                const consultationCard = `
-                    <div class="bg-white p-4 rounded-lg shadow-md border-l-4 border-green-500 mb-3">
-                        <p class="font-bold text-md">Patient: ${c.patientName} <span class="text-sm font-normal text-gray-500 ml-2">(ID: ${c.patientId.substring(0, 5)})</span></p>
-                        <p class="text-sm text-gray-700 mt-1">${c.notes}</p>
-                        <p class="text-xs text-gray-500 mt-2">Recorded by: ${c.recordedBy.substring(0, 8)} on ${new Date(c.timestamp).toLocaleDateString()} at ${new Date(c.timestamp).toLocaleTimeString()}</p>
-                    </div>
-                `;
-                container.innerHTML += consultationCard;
-            });
-        };
-
-        /** Renders the inventory list */
-        const renderInventory = (items) => {
-            const container = document.getElementById('inventory-list');
-            container.innerHTML = '';
-            
-            items.sort((a, b) => a.name.localeCompare(b.name)).forEach(item => {
-                const stockColor = item.stock < 10 ? 'text-red-600 font-bold' : 'text-green-600';
-                
-                const actionsHtml = currentUserRole === 'Admin' ? `
-                    <div class="w-1/6 flex justify-end space-x-2">
-                        <button onclick="updateInventoryStock('${item.id}', 10)" class="text-xs px-2 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-transform transform hover:scale-105">Add 10</button>
-                        <button onclick="updateInventoryStock('${item.id}', -1)" class="text-xs px-2 py-1 bg-red-500 text-white rounded-md hover:bg-red-600 transition-transform transform hover:scale-105">Use 1</button>
-                    </div>` : `<p class="w-1/6 text-center text-gray-400">View Only</p>`;
-
-                const itemRow = `
-                    <div class="flex justify-between items-center p-3 border-b border-gray-100 hover:bg-gray-50">
-                        <p class="font-medium w-1/3">${item.name}</p>
-                        <p class="w-1/3 text-center">Location: ${item.location}</p>
-                        <p class="w-1/6 text-center ${stockColor}">Stock: ${item.stock}</p>
-                        ${actionsHtml}
-                    </div>
-                `;
-                container.innerHTML += itemRow;
-            });
-        };
-        
-        // --- Setup and Initialization ---
-
-        /** Seeds initial inventory items if the collection is empty */
-        const checkAndSeedInventory = async () => {
-            // Only seed if user is Admin and data hasn't been loaded yet
-            if (!isAuthReady || currentUserRole !== 'Admin') return; 
-
-            const q = query(getPublicCollectionRef('inventory'));
-            const snapshot = await getDocs(q);
-
-            if (snapshot.empty) {
-                console.log("Inventory is empty. Seeding initial data...");
-                const initialItems = [
-                    { name: 'Paracetamol', stock: 500, location: 'Pharmacy A' },
-                    { name: 'IV Drip Solution', stock: 120, location: 'Storage 2' },
-                    { name: 'Surgical Gloves (Box)', stock: 45, location: 'Storage 1' },
-                    { name: 'Antibiotic X', stock: 80, location: 'Pharmacy B' },
-                ];
-                
-                for (const item of initialItems) {
-                    await addDoc(getPublicCollectionRef('inventory'), item);
-                }
-            }
-        };
-
-        /** Initializes Firebase and handles authentication. */
-        const initFirebase = async () => {
-            appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            let firebaseConfig = null;
-            let isAnon = false;
-            const statusElement = document.getElementById('db-status');
-
-            // Set initial status to indicate we are checking for config
-            statusElement.textContent = "Status: Checking Firebase configuration...";
-            statusElement.classList.add('text-yellow-600');
-
-
-            // 1. Check for and parse the configuration string
-            try {
-                // Check if the global variable exists and is a non-empty string
-                if (typeof __firebase_config !== 'undefined' && __firebase_config && __firebase_config.trim().length > 0) {
-                    firebaseConfig = JSON.parse(__firebase_config);
-                    console.log("SUCCESS: Found and parsed Firebase config string.");
-                } else {
-                    console.error("DEBUG: __firebase_config is undefined, null, or an empty string.");
-                    // REDUNDANT CHECK: Sometimes the variable is present but empty, logging its type helps.
-                    console.error("DEBUG: Type of __firebase_config:", typeof __firebase_config);
-                }
-            } catch (e) {
-                console.error("CRITICAL ERROR: Failed to parse Firebase config string. Is it valid JSON?", e);
-            }
-
-            // 2. Critical Configuration Check
-            if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
-                const message = "CRITICAL ERROR: Failed to connect to Firebase. Firebase configuration is missing or empty.";
-                statusElement.textContent = message;
-                statusElement.classList.remove('text-yellow-600');
-                statusElement.classList.add('text-red-600', 'font-bold');
-                console.error(message);
-                
-                // If the error persists, it is an environment issue, not a code issue.
-                showMessage('CRITICAL ERROR', 'The Firebase configuration variable (__firebase_config) could not be loaded or was empty. Since your login page works, the issue is likely how the environment passes this configuration to the dashboard file. Please try reloading the page.', 'error');
-                return; 
-            }
-            
-            // 3. Initialize Firebase services
-            try {
-                app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                setLogLevel('debug'); // Enable Firestore debug logging
-                console.log("SUCCESS: Firebase App Initialized.");
-            } catch(e) {
-                console.error("ERROR: Failed to initialize Firebase App with config.", e);
-                statusElement.textContent = "ERROR: Failed to initialize Firebase SDK.";
-                statusElement.classList.remove('text-yellow-600');
-                statusElement.classList.add('text-red-600', 'font-bold');
-                return;
-            }
-
-
-            // 4. Handle Authentication
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                try {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                    console.log("SUCCESS: Signed in with custom token.");
-                } catch (error) {
-                    console.error("Custom token sign-in failed, falling back to anonymous:", error);
-                    await signInAnonymously(auth);
-                    isAnon = true;
-                }
-            } else {
-                await signInAnonymously(auth);
-                isAnon = true;
-                console.log("INFO: Using anonymous sign-in (No initial token provided).");
-            }
-            
-            // 5. Auth State Listener
-            onAuthStateChanged(auth, (user) => {
-                if (user) {
-                    if (isAuthReady) return; 
-                    
-                    userId = user.uid;
-                    initializeDashboard(appId, userId);
-                    isAuthReady = true;
-
-                    const roleText = isAnon ? 'Anonymous' : 'Authenticated';
-                    const statusText = `Status: Logged in as ${roleText} | UID: ${userId}`;
-                    statusElement.textContent = statusText;
-                    statusElement.classList.remove('text-red-600', 'font-bold', 'text-yellow-600');
-                    statusElement.classList.add('text-blue-600');
-
-                } else {
-                    console.warn("User state changed to logged out.");
-                    statusElement.textContent = "Status: Not Authenticated. Cannot use database.";
-                    statusElement.classList.remove('text-blue-600', 'text-yellow-600');
-                    statusElement.classList.add('text-red-600');
-                }
-            });
-        };
-
-        // --- Event Handlers Setup ---
-        window.onload = () => {
-            initFirebase();
-            
-            // Patient Form Submission
-            document.getElementById('patient-form').addEventListener('submit', (e) => {
-                e.preventDefault();
-                const name = document.getElementById('patient-name').value;
-                const dob = document.getElementById('patient-dob').value;
-                const contact = document.getElementById('patient-contact').value;
-                addPatient(name, dob, contact);
-            });
-
-            // Consultation Form Submission
-            document.getElementById('consultation-form').addEventListener('submit', (e) => {
-                e.preventDefault();
-                const patientId = document.getElementById('patient-id-consultation').value;
-                const patientName = document.getElementById('patient-name-consultation').value;
-                const notes = document.getElementById('consultation-notes').value;
-                
-                if (!patientId || !patientName) {
-                    showMessage('Error', 'Please select a patient or manually enter the ID/Name.', 'error');
-                    return;
-                }
-                addConsultation(patientId, patientName, notes);
-            });
-
-            // Make public functions available globally for inline HTML events
-            window.updatePatientStatus = updatePatientStatus;
-            window.updateInventoryStock = updateInventoryStock;
-            window.switchTab = switchTab;
-            window.hideMessage = hideMessage;
-        };
-    </script>
+    <!-- Inter Font -->
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         body { font-family: 'Inter', sans-serif; background-color: #f4f7f9; }
-        .tab-panel { min-height: 500px; }
+        .dashboard-card {
+            background-color: #ffffff;
+            border: 1px solid #e0e7ff; /* Indigo 100 */
+            transition: all 0.2s ease-in-out;
+        }
+        /* Style for the sticky header in task lists */
+        .sticky-header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        /* Modal Backdrop */
+        .modal-backdrop {
+            background-color: rgba(0, 0, 0, 0.5);
+        }
     </style>
 </head>
-<body class="p-6">
+<body class="min-h-screen flex flex-col">
 
-    <!-- Message Modal (Replaces alert()) -->
-    <div id="message-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center z-50">
-        <div class="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full transform transition-all duration-300 scale-100">
-            <h3 id="modal-title" class="text-xl font-semibold mb-2"></h3>
-            <p id="modal-message" class="text-gray-700 mb-4"></p>
-            <button onclick="hideMessage()" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 font-medium transition duration-150">Close</button>
+    <!-- Header -->
+    <header class="bg-indigo-700 text-white shadow-lg p-4 flex justify-between items-center z-20">
+        <div class="flex items-center space-x-3">
+            <svg class="w-8 h-8 text-indigo-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 11h16M4 15h16M4 19h16"></path></svg>
+            <h1 class="text-xl md:text-2xl font-bold">Clinic Management Dashboard</h1>
+        </div>
+        <div id="user-info" class="flex items-center space-x-4 text-sm">
+            <!-- User info and Logout button will be injected here -->
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="flex-grow p-4 md:p-8 overflow-y-auto">
+        <div id="loading" class="text-center p-12 text-indigo-600 font-semibold">
+            Connecting to Firebase and loading dashboard data...
+        </div>
+        <div id="content" class="container mx-auto hidden">
+            <!-- Role-specific dashboard content will be injected here -->
+        </div>
+    </main>
+    
+    <!-- Logout Confirmation Modal (Hidden by default) -->
+    <div id="logout-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 z-50 flex items-center justify-center hidden">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-xl font-bold text-gray-800 mb-4">Confirm Logout</h3>
+            <p class="text-gray-600 mb-6">Are you sure you want to log out of the clinic system?</p>
+            <div class="flex justify-end space-x-3">
+                <button onclick="closeLogoutModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                <button onclick="performLogout()" class="px-4 py-2 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition">Logout</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Add Patient Modal (Hidden by default) -->
+    <div id="add-patient-modal" class="fixed inset-0 modal-backdrop z-50 flex items-center justify-center hidden">
+        <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg transform transition-all scale-100 duration-300">
+            <h3 class="text-2xl font-bold text-indigo-700 mb-6 border-b pb-2">Register New Patient</h3>
+            <form id="add-patient-form">
+                <div class="space-y-4">
+                    <div>
+                        <label for="patient-name" class="block text-sm font-medium text-gray-700">Patient Full Name</label>
+                        <input type="text" id="patient-name" required placeholder="e.g., Jane T. Smith"
+                               class="mt-1 block w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <label for="patient-reason" class="block text-sm font-medium text-gray-700">Reason for Visit</label>
+                        <input type="text" id="patient-reason" required placeholder="e.g., Annual Checkup, Sore Throat"
+                               class="mt-1 block w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                    </div>
+                    <div class="flex space-x-4">
+                        <div class="w-1/2">
+                            <label for="patient-room" class="block text-sm font-medium text-gray-700">Assigned Room</label>
+                            <input type="text" id="patient-room" placeholder="e.g., 2A" value="Waiting Area"
+                                   class="mt-1 block w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div class="w-1/2">
+                            <label for="patient-id" class="block text-sm font-medium text-gray-700">Patient ID (Auto)</label>
+                            <input type="text" id="patient-id" disabled value="P-XXXXX (Auto-generated)"
+                                   class="mt-1 block w-full p-3 border border-gray-200 bg-gray-50 rounded-lg shadow-inner">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-end space-x-3 mt-8">
+                    <button type="button" onclick="window.closeAddPatientModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition">Register Patient</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- NEW: Consultation Report Modal (Hidden by default) -->
+    <div id="consultation-modal" class="fixed inset-0 modal-backdrop z-50 flex items-center justify-center hidden">
+        <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-xl transform transition-all scale-100 duration-300">
+            <h3 class="text-2xl font-bold text-red-700 mb-6 border-b pb-2">Submit Consultation/Duty Report</h3>
+            <form id="consultation-form">
+                <div class="space-y-4">
+                    <div>
+                        <label for="report-title" class="block text-sm font-medium text-gray-700">Report Title / Subject</label>
+                        <input type="text" id="report-title" required placeholder="e.g., End of Shift Summary, Patient Jane Doe Consultation"
+                               class="mt-1 block w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                    </div>
+                    <div>
+                        <label for="report-patient" class="block text-sm font-medium text-gray-700">Link to Patient (Optional)</label>
+                        <select id="report-patient" 
+                                class="mt-1 block w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            <option value="">-- General Report (No specific patient) --</option>
+                            <!-- Patient list will be populated by JS -->
+                        </select>
+                    </div>
+                    <div>
+                        <label for="report-content" class="block text-sm font-medium text-gray-700">Report Content / Details</label>
+                        <textarea id="report-content" required placeholder="Detailed notes about the consultation, shift duty, or critical observation..." rows="6"
+                               class="mt-1 block w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500"></textarea>
+                    </div>
+                </div>
+
+                <div class="flex justify-end space-x-3 mt-8">
+                    <button type="button" onclick="window.closeConsultationModal()" class="px-4 py-2 bg-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition">Submit Report to Admin</button>
+                </div>
+            </form>
         </div>
     </div>
 
-    <div class="max-w-4xl mx-auto bg-white p-8 rounded-2xl shadow-xl">
-        <header class="mb-6 border-b pb-4">
-            <h1 class="text-3xl font-bold text-gray-800">Clinic System Dashboard</h1>
-            <div class="flex justify-between items-center text-sm mt-2 text-gray-600">
-                <span id="db-status" class="text-xs font-mono text-blue-600">Initializing database...</span>
-                <span id="current-role" class="px-3 py-1 bg-blue-100 text-blue-800 rounded-full font-semibold">Role: Loading...</span>
-            </div>
-            <div class="mt-1 text-xs text-gray-500">
-                <p>UID is displayed for collaborative purposes. Initial role is set to **Nurse** for demonstration.</p>
-            </div>
-        </header>
+    <!-- Custom Alert Box Container -->
+    <div id="alert-container" class="fixed top-4 right-4 z-50 space-y-2"></div>
 
-        <!-- Tab Navigation -->
-        <nav id="tab-navigation" class="flex border-b-2 border-blue-500 -mb-px space-x-2"></nav>
+    <!-- Firebase Imports and Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // CRITICAL FIX: Added getDocs to the imports for one-time collection fetch check
+        import { getFirestore, collection, query, onSnapshot, doc, updateDoc, addDoc, serverTimestamp, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        <!-- Content Panels -->
-        <div class="mt-4 border border-t-0 border-blue-500 p-4 rounded-b-lg bg-gray-50">
+        // --- HARDCODED CONFIGURATION (MUST MATCH index.html) ---
+        const YOUR_FIREBASE_CONFIG = {
+            apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
+            authDomain: "clinic-system-1579b.firebaseapp.com",
+            projectId: "clinic-system-1579b",
+            storageBucket: "clinic-system-1579b.firebasestorage.app",
+            messagingSenderId: "211282606869",
+            appId: "1:211282606869:web:853ddeee9ddba036b1c71c",
+            measurementId: "G-B2GSH85BMT"
+        };
+        
+        // Global variables provided by the Canvas environment
+        const clinicAppId = typeof __app_id !== 'undefined' ? __app_id : 'clinic-default-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : YOUR_FIREBASE_CONFIG;
+        
+        // --- AUTH & STATE ---
+        const authData = {
+            role: sessionStorage.getItem('clinic_user_role'),
+            name: sessionStorage.getItem('clinic_user_name'),
+            key: sessionStorage.getItem('clinic_user_key'),
+            uid: sessionStorage.getItem('clinic_auth_uid'), // Real Firebase UID
+        };
+
+        const state = {
+            inventory: [],
+            roles: [],
+            globalTasks: [], 
+            patients: [], 
+            consultations: [], // Consultation reports
+        };
+
+        let db = null;
+        let auth = null;
+        let unsubscribeInventory = () => {};
+        let unsubscribeRoles = () => {};
+        let unsubscribeTasks = () => {}; 
+        let unsubscribePatients = () => {};
+        let unsubscribeConsultations = () => {};
+
+        // --- FIRESTORE PATHS ---
+        const getInventoryCollectionRef = () => collection(db, `artifacts/${clinicAppId}/public/data/inventory`);
+        const getRolesCollectionRef = () => collection(db, `artifacts/${clinicAppId}/public/data/roles`);
+        const getTasksCollectionRef = () => collection(db, `artifacts/${clinicAppId}/public/data/globalTasks`);
+        const getPatientsCollectionRef = () => collection(db, `artifacts/${clinicAppId}/public/data/patients`); 
+        const getConsultationsCollectionRef = () => collection(db, `artifacts/${clinicAppId}/public/data/consultations`); // NEW
+
+        // --- UTILITIES ---
+
+        function checkAuthAndRedirect() {
+            if (!authData.role || !authData.uid) {
+                // Not authenticated or session expired. Redirect to login.
+                window.location.href = 'index.html';
+            }
+        }
+        
+        // Custom Alert Box implementation (since alert() is forbidden)
+        function alertBox(message, type = 'info') {
+            const container = document.getElementById('alert-container');
+            const box = document.createElement('div');
+            box.textContent = message;
+            box.className = `p-4 rounded-lg shadow-lg text-white font-semibold opacity-0 transition-opacity duration-300`;
+            box.style.opacity = '0';
             
-            <!-- Patients Panel -->
-            <div id="panel-Patients" class="tab-panel">
-                <h2 class="text-2xl font-semibold mb-4 text-blue-700">Patient Management</h2>
+            if (type === 'success') {
+                box.classList.add('bg-green-600');
+            } else if (type === 'error') {
+                box.classList.add('bg-red-600');
+            } else {
+                box.classList.add('bg-indigo-600');
+            }
+            
+            container.prepend(box); // Add to the top
+            
+            // Fade in
+            setTimeout(() => { box.style.opacity = '1'; }, 10);
+
+            // Fade out and remove
+            setTimeout(() => {
+                box.style.opacity = '0';
+                setTimeout(() => box.remove(), 300);
+            }, 5000);
+        }
+
+        // --- FIREBASE INITIALIZATION & LISTENERS ---
+
+        function initFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // Start data fetching
+                startDataListeners();
                 
-                <div class="grid md:grid-cols-2 gap-6">
-                    <!-- New Patient Form -->
-                    <div class="bg-white p-5 rounded-xl shadow-lg h-full">
-                        <h3 class="text-xl font-semibold mb-3 text-gray-800">Admit New Patient</h3>
-                        <form id="patient-form" class="space-y-3">
-                            <input type="text" id="patient-name" placeholder="Patient Name" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500">
-                            <input type="date" id="patient-dob" placeholder="Date of Birth" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500">
-                            <input type="text" id="patient-contact" placeholder="Contact/Phone" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500">
-                            <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold hover:bg-blue-700 transition duration-150 shadow-md">Admit Patient</button>
-                        </form>
-                    </div>
+                // Show content now that Firebase is initialized and data fetching has started
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('content').classList.remove('hidden');
+                render();
+            } catch (e) {
+                console.error("Firebase initialization failed:", e);
+                document.getElementById('loading').textContent = `CRITICAL ERROR: Failed to connect to Firebase. ${e.message}`;
+                window.alertBox(`Critical Error: Firebase failed to initialize. ${e.message}`, 'error');
+            }
+        }
 
-                    <!-- Patient List -->
-                    <div class="h-full">
-                        <h3 class="text-xl font-semibold mb-3 text-gray-800">Current Admissions</h3>
-                        <div id="patients-list" class="space-y-3 max-h-96 overflow-y-auto pr-2">
-                            <!-- Patients loaded here by renderPatients -->
-                            <p class="text-center text-gray-400 p-8">Loading patient data...</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
+        function startDataListeners() {
+            // 1. Inventory Listener
+            unsubscribeInventory = onSnapshot(query(getInventoryCollectionRef()), (snapshot) => {
+                state.inventory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                state.inventory.sort((a, b) => a.name.localeCompare(b.name));
+                render();
+            }, (error) => {
+                console.error("Error listening to inventory:", error);
+                window.alertBox("Error fetching inventory data.", 'error');
+            });
 
-            <!-- Consultations Panel -->
-            <div id="panel-Consultations" class="tab-panel hidden">
-                <h2 class="text-2xl font-semibold mb-4 text-blue-700">Consultation Records</h2>
-
-                <div class="grid md:grid-cols-2 gap-6">
-                    <!-- New Consultation Form -->
-                    <div class="bg-white p-5 rounded-xl shadow-lg h-full">
-                        <h3 class="text-xl font-semibold mb-3 text-gray-800">Record New Consultation</h3>
-                        <form id="consultation-form" class="space-y-3">
-                            <input type="text" id="patient-id-consultation" placeholder="Patient ID (e.g. from above list)" required class="w-full p-2 border border-gray-300 rounded-lg">
-                            <input type="text" id="patient-name-consultation" placeholder="Patient Name" required class="w-full p-2 border border-gray-300 rounded-lg">
-                            <textarea id="consultation-notes" placeholder="Consultation Notes / Diagnosis / Prescription" rows="4" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"></textarea>
-                            <button type="submit" class="w-full bg-yellow-600 text-white py-2 rounded-lg font-semibold hover:bg-yellow-700 transition duration-150 shadow-md">Save Consultation</button>
-                        </form>
-                    </div>
-
-                    <!-- Consultation History List -->
-                    <div class="h-full">
-                        <h3 class="text-xl font-semibold mb-3 text-gray-800">Consultation History</h3>
-                        <div id="consultations-list" class="space-y-3 max-h-96 overflow-y-auto pr-2">
-                             <!-- Consultations loaded here by renderConsultations -->
-                             <p class="text-center text-gray-400 p-8">Loading consultations...</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Inventory Panel -->
-            <div id="panel-Inventory" class="tab-panel hidden">
-                <h2 class="text-2xl font-semibold mb-4 text-blue-700">Medical Inventory</h2>
-                <p class="mb-4 text-gray-600">Admins can adjust stock levels. Nurses can view stock. Inventory is seeded if empty.</p>
-
-                <div class="bg-white rounded-xl shadow-lg overflow-hidden">
-                    <div class="flex justify-between font-bold text-gray-700 bg-gray-100 p-3 border-b border-gray-200">
-                        <p class="w-1/3">Item</p>
-                        <p class="w-1/3 text-center">Location</p>
-                        <p class="w-1/6 text-center">Stock</p>
-                        <p class="w-1/6 text-right">Actions</p>
-                    </div>
-                    <div id="inventory-list" class="max-h-96 overflow-y-auto">
-                        <!-- Inventory loaded here by renderInventory -->
-                        <p class="text-center text-gray-400 p-8">Loading inventory...</p>
-                    </div>
-                </div>
-            </div>
+            // 2. Roles Listener
+            unsubscribeRoles = onSnapshot(query(getRolesCollectionRef()), (snapshot) => {
+                state.roles = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() }));
+                render();
+            }, (error) => {
+                console.error("Error listening to roles:", error);
+                window.alertBox("Error fetching roles data.", 'error');
+            });
             
-        </div>
-    </div>
+            // 3. Global Tasks Listener
+            unsubscribeTasks = onSnapshot(query(getTasksCollectionRef()), (snapshot) => {
+                state.globalTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                state.globalTasks.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
+                render();
+            }, (error) => {
+                console.error("Error listening to global tasks:", error);
+                window.alertBox("Error fetching global tasks.", 'error');
+            });
+
+            // 4. Patients Listener
+            unsubscribePatients = onSnapshot(query(getPatientsCollectionRef()), (snapshot) => {
+                state.patients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                state.patients.sort((a, b) => (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0));
+                render();
+            }, (error) => {
+                console.error("Error listening to patients:", error);
+                window.alertBox("Error fetching patient data.", 'error');
+            });
+            
+            // 5. Consultations Listener
+            unsubscribeConsultations = onSnapshot(query(getConsultationsCollectionRef()), (snapshot) => {
+                state.consultations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                // Sort newest first
+                state.consultations.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
+                render();
+            }, (error) => {
+                console.error("Error listening to consultations:", error);
+                window.alertBox("Error fetching consultation data.", 'error');
+            });
+            
+            // Initial data population for fresh start - ONLY if no patients exist
+            // FIX: Replaced .get().then(...) with getDocs(ref).then(...)
+            getDocs(getPatientsCollectionRef()).then(snapshot => { 
+                if (snapshot.empty) {
+                    const initialPatients = [
+                        { name: 'Eleanor A. Vance', reason: 'Annual Checkup', status: 'In Waiting', room: '1A', createdAt: serverTimestamp() },
+                        { name: 'Robert J. Chen', reason: 'Fever & Cough', status: 'In Examination', room: '2C', createdAt: serverTimestamp() },
+                        { name: 'Maria D. Rodriguez', reason: 'Vaccination', status: 'In Waiting', room: '2B', createdAt: serverTimestamp() },
+                        { name: 'Samuel P. Hayes', reason: 'Migraine Consultation', status: 'In Waiting', room: '1B', createdAt: serverTimestamp() },
+                        { name: 'Linda M. Kim', reason: 'Routine Bloodwork', status: 'In Examination', room: '3A', createdAt: serverTimestamp() },
+                        { name: 'David O. Wilson', reason: 'Post-Op Follow-up', status: 'Discharged', room: 'N/A', createdAt: serverTimestamp() },
+                    ];
+                    initialPatients.forEach(p => addDoc(getPatientsCollectionRef(), p));
+                }
+            }).catch(e => console.error("Error checking for initial patients:", e));
+        }
+
+        // --- FIREBASE ACTIONS ---
+
+        async function updateInventory(itemId, field, value) {
+            if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can update inventory.", 'error');
+            const itemRef = doc(db, `artifacts/${clinicAppId}/public/data/inventory`, itemId);
+            const updateValue = (field === 'quantity' || field === 'price') ? parseFloat(value) : value;
+            
+            try {
+                await updateDoc(itemRef, { [field]: updateValue });
+                window.alertBox(`${field} for ${state.inventory.find(i => i.id === itemId)?.name} updated successfully.`, 'success');
+            } catch (e) {
+                console.error("Failed to update inventory:", e);
+                window.alertBox(`Failed to update inventory: ${e.message}`, 'error');
+            }
+        }
+        
+        async function updateUserRole(userKey, newRole) {
+            if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can change roles.", 'error');
+            if (userKey === authData.key) return window.alertBox("Cannot change your own role while logged in.", 'error');
+
+            const roleRef = doc(db, `artifacts/${clinicAppId}/public/data/roles`, userKey);
+            
+            try {
+                await updateDoc(roleRef, { role: newRole });
+                window.alertBox(`Role for ${userKey} updated to ${newRole.toUpperCase()}.`, 'success');
+            } catch (e) {
+                console.error("Failed to update user role:", e);
+                window.alertBox(`Failed to update role: ${e.message}`, 'error');
+            }
+        }
+        
+        async function addGlobalTask() {
+            if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can post tasks.", 'error');
+
+            const title = document.getElementById('task-title').value.trim();
+            const content = document.getElementById('task-content').value.trim();
+            
+            if (!title || !content) {
+                return window.alertBox("Task Title and Content are required.", 'error');
+            }
+
+            try {
+                await addDoc(getTasksCollectionRef(), {
+                    title: title,
+                    content: content,
+                    postedBy: authData.name,
+                    timestamp: serverTimestamp(),
+                });
+                
+                document.getElementById('task-title').value = '';
+                document.getElementById('task-content').value = '';
+                window.alertBox(`Announcement "${title}" posted successfully.`, 'success');
+            } catch (e) {
+                console.error("Failed to post task:", e);
+                window.alertBox(`Failed to post task: ${e.message}`, 'error');
+            }
+        }
+        
+        async function deleteGlobalTask(taskId, taskTitle) {
+            if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can delete tasks.", 'error');
+            
+            if (!window.confirmDeletion) { window.confirmDeletion = { }; }
+            if (window.confirmDeletion[taskId]) {
+                try {
+                    await deleteDoc(doc(getTasksCollectionRef(), taskId));
+                    window.alertBox(`Announcement "${taskTitle}" deleted.`, 'success');
+                    delete window.confirmDeletion[taskId];
+                } catch (e) {
+                    console.error("Failed to delete task:", e);
+                    window.alertBox(`Failed to delete task: ${e.message}`, 'error');
+                }
+            } else {
+                window.alertBox(`Click DELETE again within 3 seconds to confirm deletion of "${taskTitle}".`, 'info');
+                window.confirmDeletion[taskId] = true;
+                setTimeout(() => { delete window.confirmDeletion[taskId]; }, 3000);
+            }
+        }
+        
+        async function deleteConsultationReport(reportId, reportTitle) {
+            if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can delete reports.", 'error');
+            
+            if (!window.confirmReportDeletion) { window.confirmReportDeletion = { }; }
+            if (window.confirmReportDeletion[reportId]) {
+                try {
+                    await deleteDoc(doc(getConsultationsCollectionRef(), reportId));
+                    window.alertBox(`Report "${reportTitle}" acknowledged and deleted.`, 'success');
+                    delete window.confirmReportDeletion[reportId];
+                } catch (e) {
+                    console.error("Failed to delete report:", e);
+                    window.alertBox(`Failed to delete report: ${e.message}`, 'error');
+                }
+            } else {
+                window.alertBox(`Click ACKNOWLEDGE/DELETE again within 3 seconds to confirm.`, 'info');
+                window.confirmReportDeletion[reportId] = true;
+                setTimeout(() => { delete window.confirmReportDeletion[reportId]; }, 3000);
+            }
+        }
+
+        // --- AUTH ACTIONS ---
+
+        function showLogoutModal() {
+            document.getElementById('logout-modal').classList.remove('hidden');
+        }
+
+        function closeLogoutModal() {
+            document.getElementById('logout-modal').classList.add('hidden');
+        }
+
+        async function performLogout() {
+            closeLogoutModal();
+            // Stop listeners
+            unsubscribeInventory();
+            unsubscribeRoles();
+            unsubscribeTasks();
+            unsubscribePatients(); 
+            unsubscribeConsultations(); 
+            
+            // Clear all local session data
+            sessionStorage.clear();
+
+            // Sign out from Firebase
+            await signOut(auth);
+            
+            // Redirect to login page
+            window.location.href = 'index.html';
+        }
+        
+        // --- NURSE ACTIONS ---
+
+        function showAddPatientModal() {
+            document.getElementById('add-patient-modal').classList.remove('hidden');
+        }
+
+        function closeAddPatientModal() {
+            document.getElementById('add-patient-modal').classList.add('hidden');
+            document.getElementById('add-patient-form').reset(); // Clear the form
+        }
+
+        async function addNewPatient(event) {
+            event.preventDefault();
+            const name = document.getElementById('patient-name').value.trim();
+            const reason = document.getElementById('patient-reason').value.trim();
+            const room = document.getElementById('patient-room').value.trim() || 'Waiting Area';
+            const status = 'In Waiting'; 
+            
+            if (!name || !reason) {
+                return window.alertBox("Patient Name and Reason are required.", 'error');
+            }
+
+            try {
+                const docRef = await addDoc(getPatientsCollectionRef(), {
+                    name: name,
+                    reason: reason,
+                    room: room,
+                    status: status,
+                    createdAt: serverTimestamp(),
+                    registeredBy: authData.name,
+                });
+                
+                window.alertBox(`Patient "${name}" registered successfully! ID: ${docRef.id.substring(0, 5)}...`, 'success');
+                closeAddPatientModal();
+            } catch (e) {
+                console.error("Failed to add new patient:", e);
+                window.alertBox(`Failed to register patient: ${e.message}`, 'error');
+            }
+        }
+        
+        async function updatePatientStatus(patientId, newStatus) {
+             if (authData.role !== 'nurse' && authData.role !== 'admin') return window.alertBox("Permission Denied: Only Nurse/Admin can update patient status.", 'error');
+
+            const patientRef = doc(db, `artifacts/${clinicAppId}/public/data/patients`, patientId);
+            const newRoom = newStatus === 'In Waiting' ? 'Waiting Area' : 
+                            newStatus === 'In Examination' ? 'Exam Room' : 
+                            newStatus === 'Discharged' ? 'N/A' : 'TBD';
+
+            try {
+                await updateDoc(patientRef, { 
+                    status: newStatus,
+                    room: newRoom, 
+                    updatedAt: serverTimestamp(),
+                });
+                window.alertBox(`Patient ${patientId.substring(0, 5)}... status updated to: ${newStatus}`, 'success');
+            } catch (e) {
+                console.error("Failed to update patient status:", e);
+                window.alertBox(`Failed to update status: ${e.message}`, 'error');
+            }
+        }
+        
+        // Consultation Report Handlers
+        function showConsultationModal() {
+            // Populate the patient dropdown with active patients
+            const patientSelect = document.getElementById('report-patient');
+            patientSelect.innerHTML = '<option value="">-- General Report (No specific patient) --</option>';
+            
+            const activePatients = state.patients.filter(p => p.status !== 'Discharged');
+            activePatients.forEach(p => {
+                const option = document.createElement('option');
+                option.value = p.id;
+                option.textContent = `${p.name} (${p.reason})`;
+                patientSelect.appendChild(option);
+            });
+
+            document.getElementById('consultation-modal').classList.remove('hidden');
+        }
+
+        function closeConsultationModal() {
+            document.getElementById('consultation-modal').classList.add('hidden');
+            document.getElementById('consultation-form').reset();
+        }
+
+        async function submitConsultationReport(event) {
+            event.preventDefault();
+            const title = document.getElementById('report-title').value.trim();
+            const patientId = document.getElementById('report-patient').value.trim();
+            const content = document.getElementById('report-content').value.trim();
+            
+            if (!title || !content) {
+                return window.alertBox("Report Title and Content are required.", 'error');
+            }
+
+            const patient = state.patients.find(p => p.id === patientId);
+
+            try {
+                await addDoc(getConsultationsCollectionRef(), {
+                    title: title,
+                    content: content,
+                    patientId: patientId || null,
+                    patientName: patient ? patient.name : 'N/A',
+                    submittedBy: authData.name,
+                    submittedById: authData.uid,
+                    timestamp: serverTimestamp(),
+                });
+                
+                window.alertBox(`Report "${title}" submitted to Admin successfully.`, 'success');
+                closeConsultationModal();
+            } catch (e) {
+                console.error("Failed to submit report:", e);
+                window.alertBox(`Failed to submit report: ${e.message}`, 'error');
+            }
+        }
+
+        // --- RENDERING FUNCTIONS ---
+
+        function renderUserInfo() {
+            const userInfoDiv = document.getElementById('user-info');
+            userInfoDiv.innerHTML = `
+                <span class="px-3 py-1 ${authData.role === 'admin' ? 'bg-red-400' : 'bg-yellow-400'} text-gray-900 font-semibold rounded-full text-xs uppercase shadow">
+                    ${authData.role}
+                </span>
+                <span class="text-sm font-medium">
+                    ${authData.name}
+                </span>
+                <button onclick="window.showLogoutModal()" class="ml-4 px-3 py-1 text-xs font-semibold bg-red-500 hover:bg-red-600 rounded-lg transition duration-150 transform hover:scale-[1.05]">
+                    Logout
+                </button>
+            `;
+        }
+        
+        function renderAdminDashboard() {
+            const activePatients = state.patients.filter(p => p.status !== 'Discharged');
+            return `
+                <div class="space-y-10">
+                    <h2 class="text-3xl font-extrabold text-indigo-700 border-b pb-2">Admin Panel: System Overview</h2>
+
+                    <!-- Summary Cards -->
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                        <div class="dashboard-card p-6 rounded-xl shadow-lg bg-indigo-50 border-l-4 border-indigo-600">
+                            <h3 class="text-lg font-semibold text-gray-700">Configured Roles</h3>
+                            <p class="text-4xl font-bold text-indigo-700">${state.roles.length}</p>
+                        </div>
+                        <div class="dashboard-card p-6 rounded-xl shadow-lg bg-green-50 border-l-4 border-green-600">
+                            <h3 class="text-lg font-semibold text-gray-700">Inventory Items</h3>
+                            <p class="text-4xl font-bold text-green-700">${state.inventory.length}</p>
+                         </div>
+                         <div class="dashboard-card p-6 rounded-xl shadow-lg bg-yellow-50 border-l-4 border-yellow-600">
+                            <h3 class="text-lg font-semibold text-gray-700">Active Patients</h3>
+                            <p class="text-4xl font-bold text-yellow-700">${activePatients.length}</p>
+                        </div>
+                        <div class="dashboard-card p-6 rounded-xl shadow-lg bg-red-50 border-l-4 border-red-600">
+                            <h3 class="text-lg font-semibold text-gray-700">Pending Reports</h3>
+                            <p class="text-4xl font-bold text-red-700">${state.consultations.length}</p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <!-- User Role Management -->
+                        <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                            <h3 class="text-2xl font-semibold text-indigo-700 border-b pb-3 mb-4">User Role Management</h3>
+                            <div class="overflow-x-auto h-96">
+                                <table class="min-w-full divide-y divide-gray-200">
+                                    <thead class="sticky-header bg-gray-100">
+                                        <tr>
+                                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User/Key</th>
+                                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="bg-white divide-y divide-gray-200">
+                                        ${state.roles.map(role => `
+                                            <tr class="${role.uid === authData.key ? 'bg-blue-50' : ''}">
+                                                <td class="px-3 py-2 text-sm">
+                                                    <span class="font-semibold text-gray-900">${role.name}</span>
+                                                    <br><span class="text-xs font-mono text-gray-500">${role.uid}</span>
+                                                </td>
+                                                <td class="px-3 py-2 text-sm">
+                                                    <span class="px-2 py-1 text-xs font-bold uppercase rounded-full ${role.role === 'admin' ? 'bg-red-200 text-red-800' : 'bg-blue-200 text-blue-800'}">
+                                                        ${role.role}
+                                                    </span>
+                                                </td>
+                                                <td class="px-3 py-2 whitespace-nowrap">
+                                                    ${role.uid === authData.key ? `
+                                                        <span class="text-xs text-gray-500 italic">Self (Locked)</span>
+                                                    ` : `
+                                                        <select class="p-1 border rounded text-xs bg-white focus:ring-indigo-500 focus:border-indigo-500" 
+                                                            onchange="window.updateUserRole('${role.uid}', this.value)">
+                                                            <option value="nurse" ${role.role === 'nurse' ? 'selected' : ''}>Nurse</option>
+                                                            <option value="admin" ${role.role === 'admin' ? 'selected' : ''}>Admin</option>
+                                                            <option value="patient">Patient (Read-Only)</option>
+                                                        </select>
+                                                    `}
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Global Task/Announcement Management -->
+                        <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                            <h3 class="text-2xl font-semibold text-indigo-700 border-b pb-3 mb-4">Global Announcement Board</h3>
+                            
+                            <!-- Post New Task Form -->
+                            <div class="bg-indigo-50 p-4 rounded-lg mb-4">
+                                <h4 class="font-bold text-indigo-600 mb-2">Post New Announcement</h4>
+                                <input type="text" id="task-title" placeholder="Title (e.g., Staff Meeting Tomorrow)" 
+                                    class="w-full p-2 border border-indigo-300 rounded-lg mb-2 text-sm focus:ring-indigo-500 focus:border-indigo-500">
+                                <textarea id="task-content" placeholder="Details of the announcement or task..." rows="3" 
+                                    class="w-full p-2 border border-indigo-300 rounded-lg mb-3 text-sm focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                                <button onclick="window.addGlobalTask()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-lg shadow-md transition-colors">
+                                    Post Announcement
+                                </button>
+                            </div>
+
+                            <!-- Existing Tasks List -->
+                            <div class="space-y-3 h-64 overflow-y-auto">
+                                ${state.globalTasks.length > 0 ? state.globalTasks.map(task => `
+                                    <div class="p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
+                                        <div class="flex justify-between items-start mb-1">
+                                            <p class="font-bold text-gray-800">${task.title}</p>
+                                            <button onclick="window.deleteGlobalTask('${task.id}', '${task.title}')" class="text-red-500 hover:text-red-700 transition">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                            </button>
+                                        </div>
+                                        <p class="text-sm text-gray-600 mb-2">${task.content}</p>
+                                        <p class="text-xs text-gray-400">Posted by ${task.postedBy} on ${task.timestamp ? new Date(task.timestamp.toMillis()).toLocaleString() : 'N/A'}</p>
+                                    </div>
+                                `).join('') : '<p class="text-center text-gray-500 py-6">No active global announcements.</p>'}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- NEW: Nurse Consultation Reports -->
+                    <div class="dashboard-card p-6 rounded-xl shadow-xl mt-8">
+                        <h3 class="text-2xl font-semibold text-red-700 border-b pb-3 mb-4 flex items-center">
+                            <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                            Incoming Nurse Consultation Reports (${state.consultations.length} Pending)
+                        </h3>
+                        <div class="space-y-4 h-96 overflow-y-auto">
+                            ${state.consultations.length > 0 ? state.consultations.map(report => `
+                                <div class="p-4 bg-red-50 border border-red-200 rounded-lg shadow-sm">
+                                    <div class="flex justify-between items-start mb-2">
+                                        <p class="font-bold text-lg text-red-800">${report.title}</p>
+                                        <button onclick="window.deleteConsultationReport('${report.id}', '${report.title}')" class="px-3 py-1 bg-red-500 text-white text-xs font-semibold rounded-lg hover:bg-red-700 transition">
+                                            Acknowledge/Delete
+                                        </button>
+                                    </div>
+                                    <p class="text-sm text-gray-600 mb-1">
+                                        <span class="font-medium">Nurse:</span> ${report.submittedBy} 
+                                        ${report.patientId ? `(Regarding: ${report.patientName})` : '(General Duty Report)'}
+                                    </p>
+                                    <p class="text-xs text-gray-400 mb-2">
+                                        Submitted: ${report.timestamp ? new Date(report.timestamp.toMillis()).toLocaleString() : 'N/A'}
+                                    </p>
+                                    <div class="mt-2 p-3 bg-white border border-gray-100 rounded-lg text-sm text-gray-700 whitespace-pre-wrap">${report.content}</div>
+                                </div>
+                            `).join('') : '<p class="text-center text-gray-500 py-6">No new consultation reports pending review.</p>'}
+                        </div>
+                    </div>
+                    
+                    <!-- Inventory Management (from previous version) -->
+                    <div class="dashboard-card p-6 rounded-xl shadow-xl mt-8">
+                        <h3 class="text-2xl font-semibold text-indigo-700 border-b pb-3 mb-4">Inventory Management (Read/Write)</h3>
+                        <div class="overflow-x-auto h-96">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="sticky-header bg-gray-100">
+                                    <tr>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Medicine Name</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price (USD)</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    ${state.inventory.map(item => `
+                                        <tr>
+                                            <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-gray-900">${item.name}</td>
+                                            <td class="px-3 py-2 whitespace-nowrap">
+                                                <input type="number" value="${item.quantity}" min="0" 
+                                                    class="w-20 p-1 border rounded text-sm text-center focus:ring-indigo-500 focus:border-indigo-500" 
+                                                    onchange="window.updateInventory('${item.id}', 'quantity', this.value)">
+                                                <span class="text-xs text-gray-500 ml-1">${item.unit}</span>
+                                            </td>
+                                            <td class="px-3 py-2 whitespace-nowrap">
+                                                <input type="number" value="${item.price}" min="0" step="0.01" 
+                                                    class="w-20 p-1 border rounded text-sm text-center focus:ring-indigo-500 focus:border-indigo-500" 
+                                                    onchange="window.updateInventory('${item.id}', 'price', this.value)">
+                                            </td>
+                                            <td class="px-3 py-2 whitespace-nowrap text-sm font-mono text-gray-500">${item.id}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-4 italic">Note: Changes update the shared inventory in real-time.</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderNurseDashboard() {
+            const activePatients = state.patients.filter(p => p.status !== 'Discharged');
+            const myReports = state.consultations.filter(r => r.submittedById === authData.uid);
+
+            return `
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    
+                    <!-- Patient Queue & Task Board (Col 1/2) -->
+                    <div class="lg:col-span-2 space-y-8">
+                        <div class="flex justify-between items-center border-b pb-2 mb-4">
+                            <h2 class="text-3xl font-extrabold text-blue-700">Nurse Workstation: Patient & Task Management</h2>
+                            <div class="flex space-x-3">
+                                <button onclick="window.showConsultationModal()" 
+                                    class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors flex items-center space-x-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                                    <span>Submit Report</span>
+                                </button>
+                                <button onclick="window.showAddPatientModal()" 
+                                    class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors flex items-center space-x-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM12 18h.01"></path></svg>
+                                    <span>Add Patient</span>
+                                </button>
+                            </div>
+                        </div>
+                        
+
+                        <!-- Task/Announcement Board -->
+                        <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                            <h3 class="text-2xl font-semibold text-yellow-700 border-b pb-3 mb-4 flex items-center">
+                                <svg class="w-6 h-6 mr-2 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1"></path></svg>
+                                Global Announcement Board
+                            </h3>
+                            <div class="space-y-3 h-64 overflow-y-auto">
+                                ${state.globalTasks.length > 0 ? state.globalTasks.map(task => `
+                                    <div class="p-4 bg-yellow-50 border border-yellow-200 rounded-lg shadow-sm">
+                                        <p class="font-bold text-yellow-800">${task.title}</p>
+                                        <p class="text-sm text-gray-700 my-1">${task.content}</p>
+                                        <p class="text-xs text-gray-500">Posted by ${task.postedBy} on ${task.timestamp ? new Date(task.timestamp.toMillis()).toLocaleDateString() : 'N/A'}</p>
+                                    </div>
+                                `).join('') : '<p class="text-center text-gray-500 py-6">No active global announcements from Admin.</p>'}
+                            </div>
+                        </div>
+
+                        <!-- Patient Queue -->
+                        <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                            <h3 class="text-2xl font-semibold text-blue-700 border-b pb-3 mb-4">Current Patient Queue (${activePatients.length} Active)</h3>
+                            <div class="space-y-4">
+                                ${activePatients.length > 0 ? activePatients.map(patient => `
+                                    <div class="bg-white p-4 rounded-lg shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center border-l-4 ${patient.status === 'In Waiting' ? 'border-yellow-500' : patient.status === 'In Examination' ? 'border-green-500' : 'border-gray-500'}">
+                                        <div class="mb-2 md:mb-0">
+                                            <p class="font-bold text-lg text-gray-800">${patient.name} <span class="text-sm font-normal text-gray-500 ml-2">(${patient.id.substring(0, 5)}...)</span></p>
+                                            <p class="text-sm text-gray-600">Reason: ${patient.reason}</p>
+                                        </div>
+                                        <div class="flex items-center space-x-3">
+                                            <span class="px-3 py-1 text-xs font-semibold rounded-full 
+                                                ${patient.status === 'In Examination' ? 'bg-green-100 text-green-800' : patient.status === 'In Waiting' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800'}">
+                                                ${patient.status} / Room ${patient.room}
+                                            </span>
+                                            <select class="p-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-blue-500 focus:border-blue-500" 
+                                                onchange="window.updatePatientStatus('${patient.id}', this.value)">
+                                                <option value="In Waiting" ${patient.status === 'In Waiting' ? 'selected' : ''}>Waiting</option>
+                                                <option value="In Examination" ${patient.status === 'In Examination' ? 'selected' : ''}>Exam</option>
+                                                <option value="Discharged" ${patient.status === 'Discharged' ? 'selected' : ''}>Discharged</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                `).join('') : '<p class="text-center text-gray-500 py-6">No active patients in the queue.</p>'}
+                            </div>
+                        </div>
+
+                    </div>
+                    
+                    <!-- Quick Actions & Reports (Col 3) -->
+                    <div class="lg:col-span-1 space-y-6">
+                        <h3 class="text-xl font-extrabold text-blue-700">Quick Reference & Reports</h3>
+
+                        <button onclick="window.alertBox('Simulated: A replenishment request has been sent to the Admin for review.', 'info')"
+                            class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-xl shadow-md transition-colors duration-200 flex items-center justify-center space-x-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
+                            <span>Request Supplies</span>
+                        </button>
+                        
+                        <!-- My Submitted Reports (Read-Only) -->
+                        <div class="dashboard-card p-4 rounded-xl shadow-xl">
+                            <h4 class="text-lg font-bold text-gray-700 mb-2 border-b pb-2 flex items-center justify-between">
+                                My Submitted Reports 
+                                <span class="text-xs bg-red-100 text-red-600 px-2 py-1 rounded-full font-bold">${myReports.length}</span>
+                            </h4>
+                            <div class="h-64 overflow-y-auto space-y-2">
+                                ${myReports.length > 0 ? myReports.map(report => `
+                                    <div class="p-3 border-l-4 border-red-400 bg-red-50 rounded-md">
+                                        <p class="text-sm font-medium text-gray-900">${report.title}</p>
+                                        <p class="text-xs text-gray-600">Patient: ${report.patientName}</p>
+                                        <p class="text-xs font-mono text-red-600 truncate">Content: ${report.content.substring(0, 50)}...</p>
+                                        <p class="text-xs text-gray-500 mt-1">Sent: ${report.timestamp ? new Date(report.timestamp.toMillis()).toLocaleDateString() : 'N/A'}</p>
+                                    </div>
+                                `).join('') : '<p class="text-center text-gray-500 py-6 text-sm">No reports submitted yet.</p>'}
+                            </div>
+                        </div>
+
+                        <div class="dashboard-card p-4 rounded-xl shadow-lg bg-blue-50 border-l-4 border-blue-600">
+                            <h4 class="text-md font-bold text-gray-700 mb-2">My Credentials</h4>
+                            <p class="text-sm text-gray-600">User: ${authData.name}</p>
+                            <p class="text-sm text-gray-600">Role: ${authData.role.toUpperCase()}</p>
+                            <p class="text-xs font-mono truncate text-gray-500">Key: ${authData.key}</p>
+                        </div>
+
+                    </div>
+                </div>
+            `;
+        }
+        
+        // --- MAIN RENDER LOOP ---
+
+        function render() {
+            checkAuthAndRedirect();
+            
+            const contentDiv = document.getElementById('content');
+            
+            renderUserInfo();
+
+            let contentHTML = '';
+            switch (authData.role) {
+                case 'admin':
+                    contentHTML = renderAdminDashboard();
+                    break;
+                case 'nurse':
+                    contentHTML = renderNurseDashboard();
+                    break;
+                default:
+                    contentHTML = `<div class="p-8 text-center bg-red-100 rounded-xl text-red-700">Access Denied: You are logged in with role <b>${authData.role.toUpperCase()}</b>. This dashboard only supports Admin and Nurse users. Please log in with an authorized key.</div>`;
+                    break;
+            }
+            
+            contentDiv.innerHTML = contentHTML;
+        }
+
+        // --- GLOBAL EXPOSURE AND INITIAL LOAD ---
+        
+        // Expose functions for HTML event handlers
+        window.showLogoutModal = showLogoutModal;
+        window.closeLogoutModal = closeLogoutModal;
+        window.performLogout = performLogout;
+        window.updateInventory = updateInventory;
+        window.updatePatientStatus = updatePatientStatus;
+        window.alertBox = alertBox;
+        window.updateUserRole = updateUserRole; 
+        window.addGlobalTask = addGlobalTask;     
+        window.deleteGlobalTask = deleteGlobalTask; 
+        window.deleteConsultationReport = deleteConsultationReport; 
+
+        // Patient Management
+        window.showAddPatientModal = showAddPatientModal;
+        window.closeAddPatientModal = closeAddPatientModal;
+        
+        // Consultation Report Management 
+        window.showConsultationModal = showConsultationModal;
+        window.closeConsultationModal = closeConsultationModal;
+        
+        // Listen for form submissions
+        document.addEventListener('DOMContentLoaded', () => {
+            const addPatientForm = document.getElementById('add-patient-form');
+            if (addPatientForm) {
+                addPatientForm.addEventListener('submit', window.addNewPatient);
+            }
+            
+            const consultationForm = document.getElementById('consultation-form');
+            if (consultationForm) {
+                consultationForm.addEventListener('submit', window.submitConsultationReport);
+            }
+        });
+
+        // 1. Initial Auth Check (before Firebase is even initialized)
+        checkAuthAndRedirect(); 
+
+        // 2. Initialize Firebase and listeners on window load
+        window.onload = initFirebase;
+    </script>
 </body>
 </html>
