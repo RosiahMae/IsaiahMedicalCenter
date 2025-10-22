@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clinic Dashboard</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font and Custom Styles for Layout -->
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f4f7f9; }
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            min-height: 100vh;
+        }
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+            #sidebar {
+                display: none; /* Hide sidebar on mobile, use a toggle if needed */
+            }
+        }
+    </style>
+</head>
+<body class="dashboard-grid">
+
+    <!-- Sidebar (Navigation) -->
+    <aside id="sidebar" class="bg-indigo-800 text-white shadow-xl p-4 flex flex-col">
+        <div class="text-2xl font-bold mb-8 tracking-wider border-b border-indigo-700 pb-4">
+            Clinic Portal
+        </div>
+        <nav class="space-y-2 flex-grow" id="nav-links">
+            <!-- Navigation links will be populated here -->
+        </nav>
+        <div class="mt-auto pt-4 border-t border-indigo-700">
+            <p id="user-info" class="text-sm font-semibold mb-2"></p>
+            <button onclick="logout()" class="w-full text-center py-2 px-4 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition-colors duration-200">
+                Logout
+            </button>
+        </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="p-6 md:p-10">
+        <header class="mb-8 border-b pb-4">
+            <h1 id="page-title" class="text-3xl font-bold text-gray-800">Dashboard</h1>
+            <p id="page-subtitle" class="text-gray-500"></p>
+        </header>
+        
+        <!-- Section Content Container -->
+        <section id="content-container" class="bg-white p-6 rounded-xl shadow-lg"></section>
+        
+        <!-- Floating Notification/Modal Container -->
+        <div id="modal-container" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center p-4 z-50">
+            <div id="modal-content" class="bg-white p-6 rounded-xl shadow-2xl max-w-lg w-full transform transition-all">
+                <!-- Modal content goes here -->
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, collection, query, limit } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'clinic-default-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+
+        // --- DOM Elements ---
+        const pageTitle = document.getElementById('page-title');
+        const pageSubtitle = document.getElementById('page-subtitle');
+        const contentContainer = document.getElementById('content-container');
+        const navLinks = document.getElementById('nav-links');
+        const userInfo = document.getElementById('user-info');
+        const modalContainer = document.getElementById('modal-container');
+        const modalContent = document.getElementById('modal-content');
+
+        // --- State Variables ---
+        let currentUserId = sessionStorage.getItem('clinic_user_id');
+        let currentUserRole = sessionStorage.getItem('clinic_user_role');
+        let db = null;
+        let auth = null;
+        let currentSection = 'appointments';
+        let inventoryData = [];
+        let appointmentsData = [];
+        
+        // --- Navigation and Routing ---
+
+        const SECTIONS = {
+            appointments: { title: 'Appointments Calendar', icon: '🗓️', subtitle: 'View and manage patient bookings.' },
+            consultation: { title: 'New Consultation', icon: '📝', subtitle: 'Start a new patient encounter record.' },
+            inventory: { title: 'Medicine Inventory', icon: '📦', subtitle: 'Track stock levels and medicine availability.' },
+            patients: { title: 'Patient Records', icon: '🧑‍⚕️', subtitle: 'Search and manage all patient data.' },
+            reports: { title: 'System Reports', icon: '📊', subtitle: 'Admin-only: Generate operational reports.', adminOnly: true },
+        };
+
+        function navigate(section) {
+            if (SECTIONS[section].adminOnly && currentUserRole !== 'admin') {
+                showModal('Access Denied', 'You do not have permission to view the Reports section.', true);
+                return;
+            }
+            currentSection = section;
+            window.history.pushState(null, null, `?section=${section}`);
+            renderCurrentSection();
+        }
+
+        // --- Modal/Message Box ---
+        function showModal(title, message, isError = false) {
+            const color = isError ? 'text-red-600' : 'text-indigo-600';
+            modalContent.innerHTML = `
+                <h3 class="text-2xl font-bold mb-4 ${color}">${title}</h3>
+                <p class="text-gray-700 mb-6">${message}</p>
+                <button onclick="closeModal()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-lg transition-colors duration-200">
+                    Close
+                </button>
+            `;
+            modalContainer.classList.remove('hidden');
+            modalContainer.classList.add('flex');
+        }
+
+        window.closeModal = () => {
+            modalContainer.classList.add('hidden');
+            modalContainer.classList.remove('flex');
+        };
+
+        // --- Render Functions (Sections) ---
+
+        function renderInventory() {
+            pageTitle.textContent = SECTIONS.inventory.title;
+            pageSubtitle.textContent = SECTIONS.inventory.subtitle;
+            
+            const totalStock = inventoryData.reduce((acc, item) => acc + item.quantity, 0);
+
+            let tableRows = inventoryData.sort((a, b) => a.name.localeCompare(b.name)).map(item => `
+                <tr class="border-b hover:bg-gray-50">
+                    <td class="px-6 py-4 font-medium text-gray-900">${item.name}</td>
+                    <td class="px-6 py-4">${item.quantity}</td>
+                    <td class="px-6 py-4">${item.unit}</td>
+                    <td class="px-6 py-4 text-green-600">$${item.price}</td>
+                </tr>
+            `).join('');
+
+            contentContainer.innerHTML = `
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                    <div class="bg-indigo-50 p-4 rounded-xl shadow-sm border border-indigo-200">
+                        <h4 class="text-lg font-semibold text-indigo-700">Total Unique Items</h4>
+                        <p class="text-3xl font-bold text-indigo-900">${inventoryData.length}</p>
+                    </div>
+                    <div class="bg-green-50 p-4 rounded-xl shadow-sm border border-green-200">
+                        <h4 class="text-lg font-semibold text-green-700">Total Stock Count</h4>
+                        <p class="text-3xl font-bold text-green-900">${totalStock}</p>
+                    </div>
+                    <div class="bg-yellow-50 p-4 rounded-xl shadow-sm border border-yellow-200">
+                        <h4 class="text-lg font-semibold text-yellow-700">Low Stock Alerts</h4>
+                        <p class="text-3xl font-bold text-yellow-900">${inventoryData.filter(i => i.quantity < 100).length}</p>
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto rounded-lg border border-gray-200">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Medicine Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${tableRows}
+                        </tbody>
+                    </table>
+                    ${inventoryData.length === 0 ? '<p class="p-6 text-center text-gray-500">No inventory data found.</p>' : ''}
+                </div>
+            `;
+        }
+
+        function renderAppointments() {
+            pageTitle.textContent = SECTIONS.appointments.title;
+            pageSubtitle.textContent = SECTIONS.appointments.subtitle;
+
+            // Mock data for display
+            const mockAppointments = [
+                { time: '9:00 AM', patient: 'Jane Doe', status: 'Confirmed' },
+                { time: '10:30 AM', patient: 'John Smith', status: 'Pending' },
+                { time: '1:00 PM', patient: 'Sarah Connor', status: 'Cancelled' },
+            ];
+
+            const rows = mockAppointments.map(app => {
+                let statusClass = app.status === 'Confirmed' ? 'bg-green-100 text-green-800' : 
+                                  app.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800';
+                return `
+                    <li class="p-4 bg-gray-50 rounded-lg shadow-sm flex justify-between items-center border-l-4 border-indigo-500">
+                        <div>
+                            <p class="text-lg font-semibold text-gray-800">${app.time}</p>
+                            <p class="text-sm text-gray-500">${app.patient}</p>
+                        </div>
+                        <span class="px-3 py-1 text-xs font-medium ${statusClass} rounded-full">${app.status}</span>
+                    </li>
+                `;
+            }).join('');
+
+            contentContainer.innerHTML = `
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-2xl font-semibold text-gray-700">Today's Schedule</h3>
+                    <button class="bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-4 rounded-lg text-sm font-medium transition-colors duration-200"
+                        onclick="showModal('New Appointment', 'New Appointment functionality would be implemented here.')">
+                        + Add Appointment
+                    </button>
+                </div>
+                <ul class="space-y-4">
+                    ${rows}
+                </ul>
+            `;
+        }
+        
+        function renderConsultation() {
+            pageTitle.textContent = SECTIONS.consultation.title;
+            pageSubtitle.textContent = SECTIONS.consultation.subtitle;
+
+            contentContainer.innerHTML = `
+                <h3 class="text-2xl font-semibold text-gray-700 mb-6">Patient Consultation Form</h3>
+                <form class="space-y-4">
+                    <div>
+                        <label for="patient-search" class="block text-sm font-medium text-gray-700">Search Patient</label>
+                        <input type="text" id="patient-search" placeholder="Enter patient ID or name..."
+                            class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <label for="chief-complaint" class="block text-sm font-medium text-gray-700">Chief Complaint</label>
+                        <textarea id="chief-complaint" rows="3" placeholder="Describe the patient's main issue..."
+                            class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                    </div>
+                    <div>
+                        <label for="diagnosis" class="block text-sm font-medium text-gray-700">Diagnosis</label>
+                        <input type="text" id="diagnosis" placeholder="Enter diagnosis..."
+                            class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <label for="medication" class="block text-sm font-medium text-gray-700">Prescribed Medication (from Inventory)</label>
+                        <select id="medication" class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500">
+                            <option value="">Select a medicine...</option>
+                            ${inventoryData.map(item => `<option value="${item.id}">${item.name} (${item.quantity} in stock)</option>`).join('')}
+                        </select>
+                    </div>
+                    <button type="button" 
+                        class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg transition-colors duration-200"
+                        onclick="showModal('Consultation Saved', 'Consultation record successfully saved to patient file.')">
+                        Save Consultation
+                    </button>
+                </form>
+            `;
+        }
+
+        function renderPatients() {
+            pageTitle.textContent = SECTIONS.patients.title;
+            pageSubtitle.textContent = SECTIONS.patients.subtitle;
+
+            // Mock Patient Data
+            const mockPatients = [
+                { id: 'P001', name: 'Alina Reyes', age: 34, last_visit: '2024-10-15' },
+                { id: 'P002', name: 'Ben Torres', age: 58, last_visit: '2024-09-01' },
+                { id: 'P003', name: 'Chris Lee', age: 22, last_visit: '2024-10-20' },
+            ];
+
+            const rows = mockPatients.map(patient => `
+                <tr class="border-b hover:bg-gray-50">
+                    <td class="px-6 py-4 font-medium text-gray-900">${patient.id}</td>
+                    <td class="px-6 py-4">${patient.name}</td>
+                    <td class="px-6 py-4">${patient.age}</td>
+                    <td class="px-6 py-4 text-sm text-gray-500">${patient.last_visit}</td>
+                    <td class="px-6 py-4">
+                        <button class="text-indigo-600 hover:text-indigo-900 text-sm font-medium"
+                            onclick="showModal('View Patient', 'Viewing full medical history for ${patient.name} (ID: ${patient.id}).')">View</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            contentContainer.innerHTML = `
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-2xl font-semibold text-gray-700">Registered Patients</h3>
+                    <button class="bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-4 rounded-lg text-sm font-medium transition-colors duration-200"
+                        onclick="showModal('New Patient', 'New Patient registration form would appear here.')">
+                        + Register New Patient
+                    </button>
+                </div>
+                <div class="overflow-x-auto rounded-lg border border-gray-200">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Age</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Visit</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${rows}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        function renderReports() {
+            pageTitle.textContent = SECTIONS.reports.title;
+            pageSubtitle.textContent = SECTIONS.reports.subtitle;
+
+            if (currentUserRole !== 'admin') {
+                contentContainer.innerHTML = `
+                    <div class="text-center p-10 bg-red-50 rounded-lg border-2 border-red-200">
+                        <p class="text-3xl mb-4">🛑</p>
+                        <h3 class="text-xl font-bold text-red-700 mb-2">Unauthorized Access</h3>
+                        <p class="text-red-600">This section is restricted to Admin users only.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            contentContainer.innerHTML = `
+                <div class="space-y-6">
+                    <h3 class="text-2xl font-semibold text-gray-700">Admin Reports Overview</h3>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="p-5 bg-blue-100 rounded-xl shadow-md">
+                            <h4 class="font-bold text-blue-800">Monthly Revenue Projection</h4>
+                            <p class="text-3xl font-extrabold text-blue-900">$25,000</p>
+                            <p class="text-sm text-blue-600">+12% from last month</p>
+                        </div>
+                        <div class="p-5 bg-purple-100 rounded-xl shadow-md">
+                            <h4 class="font-bold text-purple-800">Top Inventory Movers</h4>
+                            <p class="text-lg font-bold text-purple-900">Paracetamol, Ibuprofen</p>
+                            <p class="text-sm text-purple-600">90% of all dispenses</p>
+                        </div>
+                    </div>
+
+                    <div class="pt-4 border-t border-gray-200">
+                        <button class="bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-lg text-sm font-medium transition-colors duration-200"
+                            onclick="showModal('Report Generated', 'A full operational PDF report has been generated (Mock action).')">
+                            Generate Full Report
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderCurrentSection() {
+            switch (currentSection) {
+                case 'appointments':
+                    renderAppointments();
+                    break;
+                case 'consultation':
+                    renderConsultation();
+                    break;
+                case 'inventory':
+                    renderInventory();
+                    break;
+                case 'patients':
+                    renderPatients();
+                    break;
+                case 'reports':
+                    renderReports();
+                    break;
+                default:
+                    // Default to the first item
+                    currentSection = 'appointments';
+                    renderAppointments();
+            }
+            document.querySelectorAll('.nav-item').forEach(el => {
+                el.classList.remove('bg-indigo-700', 'font-bold');
+                if (el.dataset.section === currentSection) {
+                    el.classList.add('bg-indigo-700', 'font-bold');
+                }
+            });
+        }
+        
+        // --- Firebase Data Listeners (Real-Time Updates) ---
+
+        function setupDataListeners() {
+            // 1. Inventory Listener
+            const inventoryRef = collection(db, `artifacts/${appId}/public/data/inventory`);
+            onSnapshot(inventoryRef, (snapshot) => {
+                inventoryData = [];
+                snapshot.forEach(doc => {
+                    inventoryData.push(doc.data());
+                });
+                console.log('Inventory updated:', inventoryData.length);
+                if (currentSection === 'inventory' || currentSection === 'consultation') {
+                    renderCurrentSection();
+                }
+            }, (error) => {
+                console.error("Error listening to inventory:", error);
+                showModal('Database Error', `Failed to load inventory: ${error.message}`, true);
+            });
+        }
+
+        // --- Core Initialization ---
+
+        function initApp() {
+            // Check if user is logged in
+            if (!currentUserId || !currentUserRole) {
+                window.location.href = 'index.html';
+                return;
+            }
+
+            // Display user info
+            userInfo.innerHTML = `Role: <span class="text-indigo-200 font-bold">${currentUserRole.toUpperCase()}</span><br>ID: ${currentUserId.substring(0, 8)}...`;
+
+            // Initialize Firebase
+            if (!firebaseConfig) {
+                showModal('Config Error', 'Firebase configuration is missing.', true);
+                return;
+            }
+            const app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            
+            // Populate Navigation
+            Object.entries(SECTIONS).forEach(([key, details]) => {
+                // Restrict Reports link entirely if not Admin
+                if (details.adminOnly && currentUserRole !== 'admin') return;
+
+                const link = document.createElement('a');
+                link.href = '#';
+                link.dataset.section = key;
+                link.className = `nav-item flex items-center p-3 rounded-lg hover:bg-indigo-700 transition-colors duration-200 text-sm`;
+                link.innerHTML = `<span class="mr-3">${details.icon}</span> ${details.title}`;
+                link.onclick = (e) => {
+                    e.preventDefault();
+                    navigate(key);
+                };
+                navLinks.appendChild(link);
+            });
+
+            // Set up initial view based on URL or default
+            const urlParams = new URLSearchParams(window.location.search);
+            currentSection = urlParams.get('section') || 'appointments';
+
+            setupDataListeners();
+            renderCurrentSection();
+        }
+
+        window.logout = () => {
+            if (auth) {
+                signOut(auth).then(() => {
+                    sessionStorage.clear();
+                    window.location.href = 'index.html';
+                }).catch(error => {
+                    console.error("Logout failed:", error);
+                    showModal('Logout Error', 'Could not sign out. Try clearing session storage.', true);
+                });
+            } else {
+                sessionStorage.clear();
+                window.location.href = 'index.html';
+            }
+        };
+
+        window.onload = initApp;
+    </script>
+</body>
+</html>
