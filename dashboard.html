@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -49,7 +50,7 @@
             <!-- Role-specific dashboard content will be injected here -->
         </div>
     </main>
-
+    
     <!-- Logout Confirmation Modal (Hidden by default) -->
     <div id="logout-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 z-50 flex items-center justify-center hidden">
         <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
@@ -61,7 +62,7 @@
             </div>
         </div>
     </div>
-
+    
     <!-- Add Patient Modal (Hidden by default) -->
     <div id="add-patient-modal" class="fixed inset-0 modal-backdrop z-50 flex items-center justify-center hidden">
         <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg transform transition-all scale-100 duration-300">
@@ -99,7 +100,7 @@
             </form>
         </div>
     </div>
-
+    
     <!-- NEW: Consultation Report Modal (Hidden by default) -->
     <div id="consultation-modal" class="fixed inset-0 modal-backdrop z-50 flex items-center justify-center hidden">
         <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-xl transform transition-all scale-100 duration-300">
@@ -154,11 +155,11 @@
             appId: "1:211282606869:web:853ddeee9ddba036b1c71c",
             measurementId: "G-B2GSH85BMT"
         };
-
+        
         // Global variables provided by the Canvas environment
         const clinicAppId = typeof __app_id !== 'undefined' ? __app_id : 'clinic-default-app';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : YOUR_FIREBASE_CONFIG;
-
+        
         // --- AUTH & STATE ---
         const authData = {
             role: sessionStorage.getItem('clinic_user_role'),
@@ -198,7 +199,7 @@
                 window.location.href = 'index.html';
             }
         }
-
+        
         // Custom Alert Box implementation (since alert() is forbidden)
         function alertBox(message, type = 'info') {
             const container = document.getElementById('alert-container');
@@ -206,7 +207,7 @@
             box.textContent = message;
             box.className = `p-4 rounded-lg shadow-lg text-white font-semibold opacity-0 transition-opacity duration-300`;
             box.style.opacity = '0';
-
+            
             if (type === 'success') {
                 box.classList.add('bg-green-600');
             } else if (type === 'error') {
@@ -214,9 +215,9 @@
             } else {
                 box.classList.add('bg-indigo-600');
             }
-
+            
             container.prepend(box); // Add to the top
-
+            
             // Fade in
             setTimeout(() => { box.style.opacity = '1'; }, 10);
 
@@ -237,7 +238,7 @@
 
                 // Start data fetching
                 startDataListeners();
-
+                
                 // Show content now that Firebase is initialized and data fetching has started
                 document.getElementById('loading').classList.add('hidden');
                 document.getElementById('content').classList.remove('hidden');
@@ -268,7 +269,7 @@
                 console.error("Error listening to roles:", error);
                 window.alertBox("Error fetching roles data.", 'error');
             });
-
+            
             // 3. Global Tasks Listener
             unsubscribeTasks = onSnapshot(query(getTasksCollectionRef()), (snapshot) => {
                 state.globalTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -288,7 +289,7 @@
                 console.error("Error listening to patients:", error);
                 window.alertBox("Error fetching patient data.", 'error');
             });
-
+            
             // 5. Consultations Listener
             unsubscribeConsultations = onSnapshot(query(getConsultationsCollectionRef()), (snapshot) => {
                 state.consultations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -299,7 +300,7 @@
                 console.error("Error listening to consultations:", error);
                 window.alertBox("Error fetching consultation data.", 'error');
             });
-
+            
             // Initial data population for fresh start - ONLY if no patients exist
             // FIX: Replaced .get().then(...) with getDocs(ref).then(...)
             getDocs(getPatientsCollectionRef()).then(snapshot => { 
@@ -317,83 +318,13 @@
             }).catch(e => console.error("Error checking for initial patients:", e));
         }
 
-// Fix add patient & consultation report without changing your main code
-// We'll patch Firebase write rules dynamically from client side compliance
-
-import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-import { getAuth } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
-  authDomain: "clinic-system-1579b.firebaseapp.com",
-  projectId: "clinic-system-1579b",
-  storageBucket: "clinic-system-1579b.firebasestorage.app",
-  messagingSenderId: "211282606869",
-  appId: "1:211282606869:web:853ddeee9ddba036b1c71c",
-  measurementId: "G-B2GSH85BMT"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const auth = getAuth(app);
-
-// Monkey patch for Firestore write compliance
-window.addNewPatient = async function (event) {
-  event.preventDefault();
-  const name = document.getElementById('patient-name').value.trim();
-  const reason = document.getElementById('patient-reason').value.trim();
-  const room = document.getElementById('patient-room').value.trim() || 'Waiting Area';
-
-  if (!name || !reason) return alert('All fields required.');
-
-  try {
-    const uid = auth.currentUser?.uid || 'system-default';
-    await addDoc(collection(db, 'artifacts/clinic-default-app/public/data/patients'), {
-      name,
-      reason,
-      room,
-      status: 'In Waiting',
-      createdByUserId: uid,
-      createdByRole: 'nurse',
-      createdAt: serverTimestamp(),
-    });
-    alert('Patient added successfully');
-  } catch (err) {
-    console.error('Add patient failed', err);
-    alert('Error: ' + err.message);
-  }
-};
-
-window.submitConsultationReport = async function (event) {
-  event.preventDefault();
-  const title = document.getElementById('report-title').value.trim();
-  const content = document.getElementById('report-content').value.trim();
-
-  try {
-    const uid = auth.currentUser?.uid || 'system-default';
-    await addDoc(collection(db, 'artifacts/clinic-default-app/public/data/consultations'), {
-      title,
-      content,
-      submittedById: uid,
-      submittedBy: 'AutoUser',
-      timestamp: serverTimestamp(),
-    });
-    alert('Consultation report submitted');
-  } catch (err) {
-    console.error('Report submission failed', err);
-    alert('Error: ' + err.message);
-  }
-};
-
-
         // --- FIREBASE ACTIONS ---
 
         async function updateInventory(itemId, field, value) {
             if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can update inventory.", 'error');
             const itemRef = doc(db, `artifacts/${clinicAppId}/public/data/inventory`, itemId);
             const updateValue = (field === 'quantity' || field === 'price') ? parseFloat(value) : value;
-
+            
             try {
                 await updateDoc(itemRef, { [field]: updateValue });
                 window.alertBox(`${field} for ${state.inventory.find(i => i.id === itemId)?.name} updated successfully.`, 'success');
@@ -402,13 +333,13 @@ window.submitConsultationReport = async function (event) {
                 window.alertBox(`Failed to update inventory: ${e.message}`, 'error');
             }
         }
-
+        
         async function updateUserRole(userKey, newRole) {
             if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can change roles.", 'error');
             if (userKey === authData.key) return window.alertBox("Cannot change your own role while logged in.", 'error');
 
             const roleRef = doc(db, `artifacts/${clinicAppId}/public/data/roles`, userKey);
-
+            
             try {
                 await updateDoc(roleRef, { role: newRole });
                 window.alertBox(`Role for ${userKey} updated to ${newRole.toUpperCase()}.`, 'success');
@@ -417,13 +348,13 @@ window.submitConsultationReport = async function (event) {
                 window.alertBox(`Failed to update role: ${e.message}`, 'error');
             }
         }
-
+        
         async function addGlobalTask() {
             if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can post tasks.", 'error');
 
             const title = document.getElementById('task-title').value.trim();
             const content = document.getElementById('task-content').value.trim();
-
+            
             if (!title || !content) {
                 return window.alertBox("Task Title and Content are required.", 'error');
             }
@@ -435,7 +366,7 @@ window.submitConsultationReport = async function (event) {
                     postedBy: authData.name,
                     timestamp: serverTimestamp(),
                 });
-
+                
                 document.getElementById('task-title').value = '';
                 document.getElementById('task-content').value = '';
                 window.alertBox(`Announcement "${title}" posted successfully.`, 'success');
@@ -444,10 +375,10 @@ window.submitConsultationReport = async function (event) {
                 window.alertBox(`Failed to post task: ${e.message}`, 'error');
             }
         }
-
+        
         async function deleteGlobalTask(taskId, taskTitle) {
             if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can delete tasks.", 'error');
-
+            
             if (!window.confirmDeletion) { window.confirmDeletion = { }; }
             if (window.confirmDeletion[taskId]) {
                 try {
@@ -464,10 +395,10 @@ window.submitConsultationReport = async function (event) {
                 setTimeout(() => { delete window.confirmDeletion[taskId]; }, 3000);
             }
         }
-
+        
         async function deleteConsultationReport(reportId, reportTitle) {
             if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can delete reports.", 'error');
-
+            
             if (!window.confirmReportDeletion) { window.confirmReportDeletion = { }; }
             if (window.confirmReportDeletion[reportId]) {
                 try {
@@ -503,17 +434,17 @@ window.submitConsultationReport = async function (event) {
             unsubscribeTasks();
             unsubscribePatients(); 
             unsubscribeConsultations(); 
-
+            
             // Clear all local session data
             sessionStorage.clear();
 
             // Sign out from Firebase
             await signOut(auth);
-
+            
             // Redirect to login page
             window.location.href = 'index.html';
         }
-
+        
         // --- NURSE ACTIONS ---
 
         function showAddPatientModal() {
@@ -531,7 +462,7 @@ window.submitConsultationReport = async function (event) {
             const reason = document.getElementById('patient-reason').value.trim();
             const room = document.getElementById('patient-room').value.trim() || 'Waiting Area';
             const status = 'In Waiting'; 
-
+            
             if (!name || !reason) {
                 return window.alertBox("Patient Name and Reason are required.", 'error');
             }
@@ -545,7 +476,7 @@ window.submitConsultationReport = async function (event) {
                     createdAt: serverTimestamp(),
                     registeredBy: authData.name,
                 });
-
+                
                 window.alertBox(`Patient "${name}" registered successfully! ID: ${docRef.id.substring(0, 5)}...`, 'success');
                 closeAddPatientModal();
             } catch (e) {
@@ -553,7 +484,7 @@ window.submitConsultationReport = async function (event) {
                 window.alertBox(`Failed to register patient: ${e.message}`, 'error');
             }
         }
-
+        
         async function updatePatientStatus(patientId, newStatus) {
              if (authData.role !== 'nurse' && authData.role !== 'admin') return window.alertBox("Permission Denied: Only Nurse/Admin can update patient status.", 'error');
 
@@ -574,13 +505,13 @@ window.submitConsultationReport = async function (event) {
                 window.alertBox(`Failed to update status: ${e.message}`, 'error');
             }
         }
-
+        
         // Consultation Report Handlers
         function showConsultationModal() {
             // Populate the patient dropdown with active patients
             const patientSelect = document.getElementById('report-patient');
             patientSelect.innerHTML = '<option value="">-- General Report (No specific patient) --</option>';
-
+            
             const activePatients = state.patients.filter(p => p.status !== 'Discharged');
             activePatients.forEach(p => {
                 const option = document.createElement('option');
@@ -602,7 +533,7 @@ window.submitConsultationReport = async function (event) {
             const title = document.getElementById('report-title').value.trim();
             const patientId = document.getElementById('report-patient').value.trim();
             const content = document.getElementById('report-content').value.trim();
-
+            
             if (!title || !content) {
                 return window.alertBox("Report Title and Content are required.", 'error');
             }
@@ -619,7 +550,7 @@ window.submitConsultationReport = async function (event) {
                     submittedById: authData.uid,
                     timestamp: serverTimestamp(),
                 });
-
+                
                 window.alertBox(`Report "${title}" submitted to Admin successfully.`, 'success');
                 closeConsultationModal();
             } catch (e) {
@@ -644,7 +575,7 @@ window.submitConsultationReport = async function (event) {
                 </button>
             `;
         }
-
+        
         function renderAdminDashboard() {
             const activePatients = state.patients.filter(p => p.status !== 'Discharged');
             return `
@@ -928,14 +859,14 @@ window.submitConsultationReport = async function (event) {
                 </div>
             `;
         }
-
+        
         // --- MAIN RENDER LOOP ---
 
         function render() {
             checkAuthAndRedirect();
-
+            
             const contentDiv = document.getElementById('content');
-
+            
             renderUserInfo();
 
             let contentHTML = '';
@@ -950,12 +881,12 @@ window.submitConsultationReport = async function (event) {
                     contentHTML = `<div class="p-8 text-center bg-red-100 rounded-xl text-red-700">Access Denied: You are logged in with role <b>${authData.role.toUpperCase()}</b>. This dashboard only supports Admin and Nurse users. Please log in with an authorized key.</div>`;
                     break;
             }
-
+            
             contentDiv.innerHTML = contentHTML;
         }
 
         // --- GLOBAL EXPOSURE AND INITIAL LOAD ---
-
+        
         // Expose functions for HTML event handlers
         window.showLogoutModal = showLogoutModal;
         window.closeLogoutModal = closeLogoutModal;
@@ -971,18 +902,18 @@ window.submitConsultationReport = async function (event) {
         // Patient Management
         window.showAddPatientModal = showAddPatientModal;
         window.closeAddPatientModal = closeAddPatientModal;
-
+        
         // Consultation Report Management 
         window.showConsultationModal = showConsultationModal;
         window.closeConsultationModal = closeConsultationModal;
-
+        
         // Listen for form submissions
         document.addEventListener('DOMContentLoaded', () => {
             const addPatientForm = document.getElementById('add-patient-form');
             if (addPatientForm) {
                 addPatientForm.addEventListener('submit', window.addNewPatient);
             }
-
+            
             const consultationForm = document.getElementById('consultation-form');
             if (consultationForm) {
                 consultationForm.addEventListener('submit', window.submitConsultationReport);
