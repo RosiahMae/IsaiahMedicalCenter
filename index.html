@@ -3,1061 +3,859 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>School Clinic System - ISAIAH Medical Center</title>
-    <!-- Tailwind CSS CDN -->
+    <title>Clinic Management System</title>
+    <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Font Awesome CDN for Icons -->
+    <!-- Load Font Awesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Inter Font -->
+    <!-- Load Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, addDoc, updateDoc, deleteDoc, onSnapshot, collection, query, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // IMPORTANT: Global variables from the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // Firestore path helpers
+        const PUBLIC_COLLECTION_PATH = (collectionName) => `artifacts/${appId}/public/data/${collectionName}`;
+
+        // Global State & Services
+        const state = {
+            currentPage: 'dashboard',
+            user: { id: null, name: "Loading...", role: "Loading..." },
+            patients: [],
+            medicines: [],
+            consultations: [],
+            isAuthReady: false
+        };
+
+        let db, auth;
+
+        // Utility Functions
+        const formatTimestamp = (timestamp) => {
+            if (!timestamp) return 'N/A';
+            // Firestore timestamp object has to be converted to milliseconds
+            const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric', month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            });
+        };
+
+        const renderApp = () => {
+            // Update User Info in Top Bar
+            const userElement = document.getElementById('user-info-display');
+            if (userElement) {
+                userElement.textContent = `${state.user.name} (${state.user.role})`;
+            }
+
+            // Update Sidebar Active Link
+            document.querySelectorAll('.sidebar-link').forEach(link => {
+                link.classList.remove('bg-sky-700', 'text-white');
+                link.classList.add('hover:bg-sky-600');
+                if (link.dataset.page === state.currentPage) {
+                    link.classList.add('bg-sky-700', 'text-white');
+                    link.classList.remove('hover:bg-sky-600');
+                }
+            });
+
+            const contentArea = document.getElementById('content-area');
+            if (!contentArea) return;
+            let html = '';
+            let title = '';
+
+            switch (state.currentPage) {
+                case 'dashboard':
+                    title = 'Dashboard';
+                    html = renderDashboard();
+                    break;
+                case 'patients':
+                    title = 'Patient Records';
+                    html = renderPatients();
+                    break;
+                case 'inventory':
+                    title = 'Medicine Inventory';
+                    html = renderInventory();
+                    break;
+                case 'consultations':
+                    title = 'Consultations';
+                    html = renderConsultations();
+                    break;
+                default:
+                    title = 'Not Found';
+                    html = `<div class="p-6 text-center text-gray-500">Page not found.</div>`;
+            }
+            document.getElementById('page-title-display').textContent = title;
+            contentArea.innerHTML = html;
+            attachListeners(); // Re-attach event listeners after rendering new content
+        };
+
+        const navigateTo = (page) => {
+            state.currentPage = page;
+            renderApp();
+        };
+
+        // --- Core Application Functions ---
+
+        async function initializeFirebase() {
+            setLogLevel('debug'); // Enable Firestore logging
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            // Authentication
+            try {
+                if (initialAuthToken) {
+                    const userCredential = await signInWithCustomToken(auth, initialAuthToken);
+                    state.user.id = userCredential.user.uid;
+                    state.user.name = 'Clinic Administrator'; // Placeholder user data
+                    state.user.role = 'Admin';
+                    console.log("Signed in with custom token. User ID:", state.user.id);
+                } else {
+                    const userCredential = await signInAnonymously(auth);
+                    state.user.id = userCredential.user.uid;
+                    state.user.name = 'Anonymous Nurse';
+                    state.user.role = 'Nurse';
+                    console.log("Signed in anonymously. User ID:", state.user.id);
+                }
+                state.isAuthReady = true;
+                startRealtimeListeners();
+            } catch (error) {
+                console.error("Firebase Auth Error:", error);
+                // Fallback state
+                state.isAuthReady = true;
+                state.user.name = 'Auth Failed';
+                renderApp();
+            }
+
+            renderApp();
+        }
+
+        function startRealtimeListeners() {
+            if (!db) return;
+
+            // 1. Patients Listener
+            onSnapshot(collection(db, PUBLIC_COLLECTION_PATH('patients')), (snapshot) => {
+                state.patients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (state.currentPage === 'patients' || state.currentPage === 'dashboard') {
+                    renderApp();
+                }
+                console.log("Patients updated:", state.patients.length);
+            }, (error) => console.error("Patients snapshot error:", error));
+
+            // 2. Medicines Listener
+            onSnapshot(collection(db, PUBLIC_COLLECTION_PATH('medicines')), (snapshot) => {
+                state.medicines = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (state.currentPage === 'inventory' || state.currentPage === 'dashboard') {
+                    renderApp();
+                }
+                console.log("Medicines updated:", state.medicines.length);
+            }, (error) => console.error("Medicines snapshot error:", error));
+
+            // 3. Consultations Listener
+            onSnapshot(query(collection(db, PUBLIC_COLLECTION_PATH('consultations'))), (snapshot) => {
+                // Sort by date manually as orderBy might require an index and throw error
+                state.consultations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+                    .sort((a, b) => {
+                        const dateA = a.consultationDate?.toDate ? a.consultationDate.toDate().getTime() : 0;
+                        const dateB = b.consultationDate?.toDate ? b.consultationDate.toDate().getTime() : 0;
+                        return dateB - dateA; // Descending order
+                    });
+                if (state.currentPage === 'consultations' || state.currentPage === 'dashboard') {
+                    renderApp();
+                }
+                console.log("Consultations updated:", state.consultations.length);
+            }, (error) => console.error("Consultations snapshot error:", error));
+        }
+
+
+        // --- Render Views ---
+
+        const renderDashboard = () => {
+            const totalPatients = state.patients.length;
+            const totalMedicines = state.medicines.length;
+            const consultationsToday = state.consultations.filter(c => {
+                const date = c.consultationDate?.toDate ? c.consultationDate.toDate() : new Date();
+                return date.toDateString() === new Date().toDateString();
+            }).length;
+
+            return `
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                    ${createStatCard('Total Patients', totalPatients, 'fas fa-user-injured', 'bg-blue-500')}
+                    ${createStatCard('Medicines in Stock', totalMedicines, 'fas fa-pills', 'bg-green-500')}
+                    ${createStatCard('Consultations Today', consultationsToday, 'fas fa-stethoscope', 'bg-red-500')}
+                </div>
+
+                <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">Recent Consultations</h2>
+                <div class="overflow-x-auto bg-white p-4 rounded-lg shadow-md">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Patient Name</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Diagnosis</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200">
+                            ${state.consultations.slice(0, 5).map(c => `
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-2 whitespace-nowrap">${formatTimestamp(c.consultationDate)}</td>
+                                    <td class="px-4 py-2 whitespace-nowrap font-medium">${c.patientName}</td>
+                                    <td class="px-4 py-2 text-sm text-gray-600 truncate max-w-xs">${c.diagnosis}</td>
+                                </tr>
+                            `).join('')}
+                            ${state.consultations.length === 0 ? '<tr><td colspan="3" class="px-4 py-2 text-center text-gray-500">No recent consultations.</td></tr>' : ''}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        };
+
+        const renderPatients = () => {
+            return `
+                <div class="flex justify-between items-center mb-6">
+                    <input type="text" placeholder="Search patients..." class="p-2 border border-gray-300 rounded-lg w-full max-w-xs focus:ring-sky-500 focus:border-sky-500">
+                    <button data-modal-target="patientModal" class="bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-lg shadow transition duration-150">
+                        <i class="fas fa-plus mr-2"></i>Add New Patient
+                    </button>
+                </div>
+
+                <div class="overflow-x-auto bg-white p-4 rounded-lg shadow-md">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="table-th">ID Number</th>
+                                <th class="table-th">Full Name</th>
+                                <th class="table-th">Type</th>
+                                <th class="table-th">Course/Department</th>
+                                <th class="table-th">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200">
+                            ${state.patients.map(p => `
+                                <tr class="hover:bg-gray-50">
+                                    <td class="table-td font-mono text-xs">${p.idNumber}</td>
+                                    <td class="table-td font-medium">${p.fullName}</td>
+                                    <td class="table-td">
+                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${p.patientType === 'student' ? 'bg-indigo-100 text-indigo-800' : p.patientType === 'faculty' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800'}">
+                                            ${p.patientType.charAt(0).toUpperCase() + p.patientType.slice(1)}
+                                        </span>
+                                    </td>
+                                    <td class="table-td">${p.courseDepartment || 'N/A'}</td>
+                                    <td class="table-td space-x-2">
+                                        <button data-id="${p.id}" data-action="delete-patient" class="text-red-500 hover:text-red-700 transition duration-150"><i class="fas fa-trash-alt"></i></button>
+                                        <button data-id="${p.id}" data-action="view-patient" class="text-sky-500 hover:text-sky-700 transition duration-150"><i class="fas fa-eye"></i></button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                            ${state.patients.length === 0 ? '<tr><td colspan="5" class="px-4 py-2 text-center text-gray-500">No patient records found.</td></tr>' : ''}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        };
+
+        const renderInventory = () => {
+            return `
+                <div class="flex justify-between items-center mb-6">
+                    <input type="text" placeholder="Search medicines..." class="p-2 border border-gray-300 rounded-lg w-full max-w-xs focus:ring-sky-500 focus:border-sky-500">
+                    <button data-modal-target="inventoryModal" class="bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-lg shadow transition duration-150">
+                        <i class="fas fa-plus mr-2"></i>Add New Medicine
+                    </button>
+                </div>
+
+                <div class="overflow-x-auto bg-white p-4 rounded-lg shadow-md">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="table-th">Name</th>
+                                <th class="table-th">Description</th>
+                                <th class="table-th">Stock</th>
+                                <th class="table-th">Unit</th>
+                                <th class="table-th">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200">
+                            ${state.medicines.map(m => `
+                                <tr class="hover:bg-gray-50 ${m.stock < 10 ? 'bg-red-50/70' : ''}">
+                                    <td class="table-td font-medium">${m.name}</td>
+                                    <td class="table-td text-sm text-gray-600 max-w-xs truncate">${m.description}</td>
+                                    <td class="table-td text-center ${m.stock < 10 ? 'font-bold text-red-600' : ''}">${m.stock}</td>
+                                    <td class="table-td">${m.unit}</td>
+                                    <td class="table-td space-x-2">
+                                        <button data-id="${m.id}" data-action="adjust-stock" class="text-green-500 hover:text-green-700 transition duration-150" title="Adjust Stock"><i class="fas fa-box"></i></button>
+                                        <button data-id="${m.id}" data-action="delete-medicine" class="text-red-500 hover:text-red-700 transition duration-150" title="Delete Medicine"><i class="fas fa-trash-alt"></i></button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                            ${state.medicines.length === 0 ? '<tr><td colspan="5" class="px-4 py-2 text-center text-gray-500">No medicines in inventory.</td></tr>' : ''}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        };
+
+        const renderConsultations = () => {
+            return `
+                <div class="flex justify-between items-center mb-6">
+                    <input type="text" placeholder="Search consultations..." class="p-2 border border-gray-300 rounded-lg w-full max-w-xs focus:ring-sky-500 focus:border-sky-500">
+                    <button data-modal-target="consultationModal" class="bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded-lg shadow transition duration-150">
+                        <i class="fas fa-plus mr-2"></i>Log New Consultation
+                    </button>
+                </div>
+
+                <div class="overflow-x-auto bg-white p-4 rounded-lg shadow-md">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="table-th">Date</th>
+                                <th class="table-th">Patient Name</th>
+                                <th class="table-th">Diagnosis / Complaint</th>
+                                <th class="table-th">Attended By</th>
+                                <th class="table-th">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200">
+                            ${state.consultations.map(c => `
+                                <tr class="hover:bg-gray-50">
+                                    <td class="table-td font-mono text-xs">${formatTimestamp(c.consultationDate)}</td>
+                                    <td class="table-td font-medium">${c.patientName}</td>
+                                    <td class="table-td text-sm text-gray-600 max-w-sm">${c.diagnosis}</td>
+                                    <td class="table-td text-sm">${c.userName}</td>
+                                    <td class="table-td">
+                                        <button data-id="${c.id}" data-action="view-consultation" class="text-sky-500 hover:text-sky-700 transition duration-150"><i class="fas fa-file-medical"></i> View</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                            ${state.consultations.length === 0 ? '<tr><td colspan="5" class="px-4 py-2 text-center text-gray-500">No consultation records found.</td></tr>' : ''}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        };
+
+        // Helper for Dashboard Stats
+        const createStatCard = (title, value, iconClass, colorClass) => `
+            <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-100 flex items-center space-x-4">
+                <div class="p-4 rounded-full ${colorClass} text-white">
+                    <i class="${iconClass} text-2xl"></i>
+                </div>
+                <div>
+                    <p class="text-sm font-medium text-gray-500">${title}</p>
+                    <p class="text-3xl font-bold text-gray-900">${value}</p>
+                </div>
+            </div>
+        `;
+
+        // --- Firebase CRUD Operations ---
+
+        // Patient Form Submission
+        const handlePatientSubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const data = Object.fromEntries(new FormData(form).entries());
+
+            try {
+                const docRef = await addDoc(collection(db, PUBLIC_COLLECTION_PATH('patients')), {
+                    ...data,
+                    fullName: data.fullName,
+                    idNumber: data.idNumber,
+                    patientType: data.patientType,
+                    dob: data.dob,
+                    createdAt: serverTimestamp()
+                });
+                alert('success', 'Patient added successfully!');
+                closeModal('patientModal');
+                form.reset();
+            } catch (error) {
+                console.error("Error adding patient: ", error);
+                alert('error', 'Failed to add patient.');
+            }
+        };
+
+        // Inventory Form Submission
+        const handleInventorySubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const data = Object.fromEntries(new FormData(form).entries());
+
+            try {
+                const docRef = await addDoc(collection(db, PUBLIC_COLLECTION_PATH('medicines')), {
+                    ...data,
+                    stock: parseInt(data.stock, 10),
+                    unit: data.unit,
+                    name: data.name,
+                    description: data.description,
+                    createdAt: serverTimestamp()
+                });
+                alert('success', 'Medicine added successfully!');
+                closeModal('inventoryModal');
+                form.reset();
+            } catch (error) {
+                console.error("Error adding medicine: ", error);
+                alert('error', 'Failed to add medicine.');
+            }
+        };
+
+        // Consultation Form Submission
+        const handleConsultationSubmit = async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const data = Object.fromEntries(new FormData(form).entries());
+
+            // Simple validation for patient selection
+            if (!data.patientId) {
+                alert('error', 'Please select a patient before logging the consultation.');
+                return;
+            }
+
+            try {
+                const docRef = await addDoc(collection(db, PUBLIC_COLLECTION_PATH('consultations')), {
+                    patientId: data.patientId,
+                    patientName: data.patientNameDisplay,
+                    userId: state.user.id,
+                    userName: state.user.name,
+                    diagnosis: data.diagnosis,
+                    notes: data.notes,
+                    consultationDate: serverTimestamp()
+                });
+                alert('success', 'Consultation logged successfully!');
+                closeModal('consultationModal');
+                form.reset();
+            } catch (error) {
+                console.error("Error logging consultation: ", error);
+                alert('error', 'Failed to log consultation.');
+            }
+        };
+
+
+        // --- UI Interactions & Listeners ---
+
+        const attachListeners = () => {
+            // 1. Navigation Links
+            document.querySelectorAll('.sidebar-link').forEach(link => {
+                link.onclick = (e) => {
+                    e.preventDefault();
+                    navigateTo(link.dataset.page);
+                };
+            });
+
+            // 2. Form Submissions (attach once after modal is rendered)
+            const patientForm = document.getElementById('patientForm');
+            if (patientForm && !patientForm.__listenerAttached) {
+                patientForm.addEventListener('submit', handlePatientSubmit);
+                patientForm.__listenerAttached = true;
+            }
+            const inventoryForm = document.getElementById('inventoryForm');
+            if (inventoryForm && !inventoryForm.__listenerAttached) {
+                inventoryForm.addEventListener('submit', handleInventorySubmit);
+                inventoryForm.__listenerAttached = true;
+            }
+            const consultationForm = document.getElementById('consultationForm');
+            if (consultationForm && !consultationForm.__listenerAttached) {
+                consultationForm.addEventListener('submit', handleConsultationSubmit);
+                consultationForm.__listenerAttached = true;
+            }
+
+            // 3. Universal Modal Logic
+            document.querySelectorAll('[data-modal-target]').forEach(button => {
+                button.onclick = () => {
+                    const modalId = button.dataset.modalTarget;
+                    document.getElementById(modalId).classList.remove('hidden');
+                };
+            });
+            document.querySelectorAll('.modal-close-btn').forEach(button => {
+                button.onclick = () => {
+                    closeModal(button.closest('.modal').id);
+                };
+            });
+            // Close modal when clicking outside
+            document.querySelectorAll('.modal').forEach(modal => {
+                modal.onclick = (e) => {
+                    if (e.target === modal) {
+                        closeModal(modal.id);
+                    }
+                };
+            });
+
+            // 4. Patient Search/Selection (for Consultation Modal)
+            const patientSearchInput = document.getElementById('patient_search_input');
+            const searchResultsContainer = document.getElementById('patient_search_results');
+            const selectedPatientIdInput = document.getElementById('patient_id_input');
+            const selectedPatientNameDisplay = document.getElementById('patient_name_display');
+
+            if (patientSearchInput) {
+                patientSearchInput.onkeyup = () => {
+                    const term = patientSearchInput.value.toLowerCase();
+                    if (term.length < 2) {
+                        searchResultsContainer.innerHTML = '';
+                        return;
+                    }
+                    const filtered = state.patients.filter(p =>
+                        p.fullName.toLowerCase().includes(term) || p.idNumber.toLowerCase().includes(term)
+                    ).slice(0, 5); // Limit to 5 results
+
+                    searchResultsContainer.innerHTML = filtered.map(p => `
+                        <div class="p-2 cursor-pointer hover:bg-sky-100 border-b last:border-b-0"
+                             data-id="${p.id}"
+                             data-name="${p.fullName}">
+                            ${p.fullName} <span class="text-xs text-gray-500">(${p.idNumber})</span>
+                        </div>
+                    `).join('');
+                };
+
+                searchResultsContainer.onclick = (e) => {
+                    const item = e.target.closest('div[data-id]');
+                    if (item) {
+                        selectedPatientIdInput.value = item.dataset.id;
+                        selectedPatientNameDisplay.value = item.dataset.name;
+                        selectedPatientNameDisplay.classList.remove('hidden');
+                        patientSearchInput.value = item.dataset.name; // Display selected name
+                        searchResultsContainer.innerHTML = ''; // Clear results
+                    }
+                };
+            }
+
+            // 5. Patient Deletion Listener
+            document.querySelectorAll('[data-action="delete-patient"]').forEach(btn => {
+                btn.onclick = (e) => {
+                    const patientId = e.currentTarget.dataset.id;
+                    confirmAction('Confirm Deletion', 'Are you sure you want to delete this patient record? This action cannot be undone.', () => {
+                        deleteFirestoreDocument(PUBLIC_COLLECTION_PATH('patients'), patientId);
+                    });
+                };
+            });
+
+            // 6. Medicine Deletion Listener
+            document.querySelectorAll('[data-action="delete-medicine"]').forEach(btn => {
+                btn.onclick = (e) => {
+                    const medicineId = e.currentTarget.dataset.id;
+                    confirmAction('Confirm Deletion', 'Are you sure you want to delete this medicine from inventory?', () => {
+                        deleteFirestoreDocument(PUBLIC_COLLECTION_PATH('medicines'), medicineId);
+                    });
+                };
+            });
+        };
+
+        const deleteFirestoreDocument = async (collectionPath, docId) => {
+             try {
+                await deleteDoc(doc(db, collectionPath, docId));
+                alert('success', 'Record deleted successfully.');
+             } catch (error) {
+                console.error("Error deleting document: ", error);
+                alert('error', 'Failed to delete record.');
+             }
+        };
+
+        const closeModal = (modalId) => {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.classList.add('hidden');
+                // Reset patient search on consultation modal close
+                if (modalId === 'consultationModal') {
+                    document.getElementById('patient_search_input').value = '';
+                    document.getElementById('patient_search_results').innerHTML = '';
+                    document.getElementById('patient_id_input').value = '';
+                    document.getElementById('patient_name_display').value = '';
+                }
+            }
+        };
+
+        // Custom Alert/Confirmation UI (replaces alert() and confirm())
+
+        const alert = (type, message) => {
+            const container = document.getElementById('alertContainer');
+            const alertClasses = {
+                success: 'bg-green-100 border-green-500 text-green-700',
+                error: 'bg-red-100 border-red-500 text-red-700',
+                info: 'bg-blue-100 border-blue-500 text-blue-700'
+            };
+            const alertIcon = {
+                success: 'fas fa-check-circle',
+                error: 'fas fa-times-circle',
+                info: 'fas fa-info-circle'
+            };
+
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `p-4 border-l-4 rounded-lg shadow-md mb-3 ${alertClasses[type]} flex items-center justify-between`;
+            alertDiv.innerHTML = `
+                <div class="flex items-center">
+                    <i class="${alertIcon[type]} mr-3"></i>
+                    <p class="font-medium">${message}</p>
+                </div>
+                <button class="text-sm font-semibold opacity-70 hover:opacity-100 close-alert">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
+
+            alertDiv.querySelector('.close-alert').onclick = () => alertDiv.remove();
+            container.appendChild(alertDiv);
+            setTimeout(() => {
+                if (alertDiv.parentNode) alertDiv.remove();
+            }, 5000);
+        };
+
+        const confirmAction = (title, message, onConfirm) => {
+            const modal = document.getElementById('confirmationModal');
+            document.getElementById('confirmTitle').textContent = title;
+            document.getElementById('confirmMessage').textContent = message;
+
+            const confirmBtn = document.getElementById('confirmButton');
+            confirmBtn.onclick = () => {
+                onConfirm();
+                closeModal('confirmationModal');
+            };
+
+            modal.classList.remove('hidden');
+        };
+
+        // Initialize on load
+        window.onload = initializeFirebase;
+    </script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-
-        /* Custom Colors and Variables */
+        /* Custom Styles to enhance Tailwind appearance */
         :root {
-            --sidebar-bg: #1e293b;
-            --primary-accent: #3b82f6;
-            --main-bg: #f1f5f9;
-            --content-bg: #ffffff;
+            --sidebar-bg: #1e293b; /* slate-900 */
+            --primary-color: #0ea5e9; /* sky-500 */
         }
-
-        /* Base Layout & Sidebar */
+        body { font-family: 'Inter', sans-serif; background-color: #f1f5f9; }
         .app-layout { display: flex; min-height: 100vh; }
-        .sidebar {
-            width: 250px;
-            background-color: var(--sidebar-bg);
-            color: #cbd5e1;
-            display: flex;
-            flex-direction: column;
-            padding: 1.5rem 0;
-            box-shadow: 4px 0 10px rgba(0,0,0,0.1);
-        }
-        .main-app-content { flex-grow: 1; display: flex; flex-direction: column; background-color: var(--main-bg); }
-        .content-area { padding: 1.5rem; flex-grow: 1; max-width: 100%; }
+        .sidebar { background-color: var(--sidebar-bg); width: 16rem; flex-shrink: 0; padding: 1.5rem 0; color: #cbd5e1; }
+        .top-bar { background-color: #ffffff; padding: 1rem 1.5rem; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px 0 rgba(0,0,0,.1); }
+        .main-content { flex-grow: 1; padding: 1.5rem; }
+        .table-th { padding: 0.5rem 1rem; text-left; text-xs; font-medium; text-gray-500; uppercase; tracking-wider; }
+        .table-td { padding: 0.5rem 1rem; whitespace-nowrap; text-sm; text-gray-800; }
 
-        .sidebar-header { padding: 0 1.5rem 1.5rem 1.5rem; font-size: 1.25rem; font-weight: 700; color: #fff; border-bottom: 1px solid #334155; }
-        .sidebar nav a {
-            display: flex; align-items: center; gap: 1rem; padding: 1rem 1.5rem;
-            transition: background-color 0.2s, color 0.2s;
-            text-decoration: none; color: #94a3b8;
-        }
-        .sidebar nav a:hover { background-color: #334155; color: #fff; }
-        .sidebar nav a.active { background-color: #334155; color: #fff; border-right: 4px solid var(--primary-accent); }
-        .sidebar-footer { margin-top: auto; padding: 1.5rem; }
-
-        /* Top Bar */
-        .top-bar {
-            background-color: var(--content-bg);
-            padding: 1rem 1.5rem;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .page-title { font-size: 1.5rem; font-weight: 600; color: #1e293b; }
-        .user-info { display: flex; align-items: center; gap: 0.75rem; font-weight: 500; }
-        .profile-pic { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
-
-        /* Tables & Data */
-        .data-table { width: 100%; border-collapse: collapse; background-color: var(--content-bg); border-radius: 0.5rem; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-        .data-table th, .data-table td { padding: 1rem; text-align: left; border-bottom: 1px solid #e2e8f0; }
-        .data-table th { background-color: #f8fafc; font-weight: 600; color: #475569; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
-        .data-table tr:last-child td { border-bottom: none; }
-        .data-table tbody tr:hover { background-color: #f0f4f8; }
-
-        /* Modals */
+        /* Modal Styles */
         .modal {
-            display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%;
-            overflow: auto; background-color: rgba(0,0,0,0.4);
-            transition: opacity 0.3s ease;
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.6); z-index: 50;
+            display: flex; justify-content: center; align-items: center;
         }
         .modal-content {
-            background-color: #fefefe; margin: 5% auto; padding: 2rem; border-radius: 1rem;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.2); width: 90%; max-width: 600px;
-            position: relative;
-            transform: translateY(-50px); opacity: 0; transition: transform 0.3s ease, opacity 0.3s ease;
+            background: #fff; padding: 2rem; border-radius: 0.75rem;
+            width: 95%; max-width: 600px; max-height: 90vh; overflow-y: auto;
+            position: relative; animation: slideDown 0.3s ease-out;
         }
-        .modal.active .modal-content { transform: translateY(0); opacity: 1; }
-        .close-button { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
-        .close-button:hover, .close-button:focus { color: #333; text-decoration: none; }
+        .modal-content-large { max-width: 800px; }
+        @keyframes slideDown { from { transform: translateY(-50px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
-        /* Forms */
-        .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
-        .form-group { margin-bottom: 1rem; }
-        .form-group label { display: block; font-weight: 600; margin-bottom: 0.5rem; color: #475569; }
-        .form-group input, .form-group select, .form-group textarea {
-            width: 100%; padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 0.5rem;
-            transition: border-color 0.2s;
+        /* Patient Search Results Styling */
+        #patient_search_results {
+            position: absolute; width: calc(100% - 3rem); background-color: white;
+            border: 1px solid #e2e8f0; border-radius: 0 0 0.5rem 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); z-index: 10;
         }
-        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--primary-accent); outline: none; box-shadow: 0 0 0 1px var(--primary-accent); }
-
-        /* Buttons & Actions */
-        .btn {
-            padding: 0.75rem 1.5rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer;
-            transition: background-color 0.2s, box-shadow 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
-        }
-        .btn-primary { background-color: var(--primary-accent); color: white; }
-        .btn-primary:hover { background-color: #2563eb; box-shadow: 0 4px 10px rgba(59, 130, 246, 0.3); }
-        .action-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: 1rem; }
-
-        /* Dashboard Stats */
-        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-top: 1.5rem; }
-        .stat-card {
-            background-color: var(--content-bg); border-radius: 0.75rem; padding: 1.5rem;
-            display: flex; align-items: center; gap: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-        .stat-card-icon { width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; color: white; }
-        .stat-card-info { flex-grow: 1; }
-        .stat-card-title { font-size: 0.875rem; color: #64748b; font-weight: 500; }
-        .stat-card-value { font-size: 2rem; font-weight: 700; color: #1e293b; }
-        .bg-blue-500 { background-color: #3b82f6; }
-        .bg-green-500 { background-color: #22c55e; }
-        .bg-red-500 { background-color: #ef4444; }
-        .bg-yellow-500 { background-color: #f59e0b; }
-
-        /* Patient Search Results */
-        .search-results { position: absolute; background-color: white; border: 1px solid #e2e8f0; border-radius: 0.5rem; max-height: 200px; overflow-y: auto; width: 100%; z-index: 10; margin-top: 4px; }
-        .search-result-item { padding: 0.75rem 1rem; cursor: pointer; border-bottom: 1px solid #f1f5f9; }
-        .search-result-item:hover { background-color: #f8fafc; }
-        .relative-container { position: relative; }
-
-        /* Responsive adjustments */
         @media (max-width: 768px) {
+            .sidebar { width: 100%; height: auto; display: none; }
+            .main-content { padding: 1rem; }
             .app-layout { flex-direction: column; }
-            .sidebar { width: 100%; height: auto; padding: 0; }
-            .sidebar nav { display: flex; flex-direction: row; overflow-x: auto; border-bottom: 1px solid #334155; }
-            .sidebar nav a { padding: 0.75rem 1rem; flex-shrink: 0; }
-            .sidebar nav a.active { border-right: none; border-bottom: 3px solid var(--primary-accent); }
-            .sidebar-header, .sidebar-footer { display: none; }
-            .main-app-content { padding-top: 0; }
-            .top-bar { padding: 0.75rem 1rem; }
-            .page-title { font-size: 1.2rem; }
-            .action-bar { flex-direction: column; align-items: stretch; }
-            .action-bar > * { width: 100%; }
-            .stat-grid { grid-template-columns: 1fr; }
-            .modal-content { margin: 10% auto; width: 95%; }
         }
     </style>
 </head>
-<body>
+<body class="bg-gray-100">
 
-<div id="app" class="app-layout">
-    <!-- Sidebar -->
-    <aside class="sidebar">
-        <div class="sidebar-header">
-            <i class="fas fa-clinic-medical mr-2"></i>
-            <span>I.S.A.I.A.H</span>
-        </div>
-        <nav id="navigation">
-            <a href="#" data-page="dashboard" class="active"><i class="fas fa-home fa-fw"></i><span>Dashboard</span></a>
-            <a href="#" data-page="patients"><i class="fas fa-user-injured fa-fw"></i><span>Patients</span></a>
-            <a href="#" data-page="consultations"><i class="fas fa-stethoscope fa-fw"></i><span>Consultations</span></a>
-            <a href="#" data-page="inventory"><i class="fas fa-pills fa-fw"></i><span>Inventory</span></a>
-        </nav>
-        <div class="sidebar-footer">
-            <!-- Logout simulation - removes local data, not useful with anonymous auth -->
-            <button onclick="signOutApp()" class="w-full text-left text-red-400 hover:text-red-300">
-                <i class="fas fa-sign-out-alt fa-fw mr-2"></i><span>Logout</span>
-            </button>
-        </div>
-    </aside>
+    <!-- Global Alert Container -->
+    <div id="alertContainer" class="fixed top-4 right-4 z-50 w-full max-w-sm"></div>
 
-    <div class="main-app-content">
-        <!-- Top Bar -->
-        <header class="top-bar">
-            <h1 id="current-page-title" class="page-title">Dashboard</h1>
-            <div class="user-info">
-                <span id="user-display-name">Loading User...</span>
-                <div class="profile-pic bg-gray-300 flex items-center justify-center text-gray-600"><i class="fas fa-user-md"></i></div>
+    <div class="app-layout">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="flex items-center space-x-3 px-6 mb-8">
+                <i class="fas fa-clinic-medical text-3xl text-sky-400"></i>
+                <span class="text-xl font-bold text-white">Clinic System</span>
             </div>
-        </header>
+            <nav class="space-y-2 px-4">
+                <a href="#" data-page="dashboard" class="sidebar-link flex items-center p-3 rounded-lg transition duration-150 hover:bg-sky-600">
+                    <i class="fas fa-chart-line mr-3 fa-fw"></i><span>Dashboard</span>
+                </a>
+                <a href="#" data-page="patients" class="sidebar-link flex items-center p-3 rounded-lg transition duration-150 hover:bg-sky-600">
+                    <i class="fas fa-users mr-3 fa-fw"></i><span>Patients</span>
+                </a>
+                <a href="#" data-page="consultations" class="sidebar-link flex items-center p-3 rounded-lg transition duration-150 hover:bg-sky-600">
+                    <i class="fas fa-stethoscope mr-3 fa-fw"></i><span>Consultations</span>
+                </a>
+                <a href="#" data-page="inventory" class="sidebar-link flex items-center p-3 rounded-lg transition duration-150 hover:bg-sky-600">
+                    <i class="fas fa-pills mr-3 fa-fw"></i><span>Inventory</span>
+                </a>
+            </nav>
+            <div class="px-6 mt-8 pt-4 border-t border-slate-700">
+                <p class="text-xs text-slate-400 mb-2">Authenticated User ID (For Auditing)</p>
+                <code class="text-xs break-all text-sky-300" id="user-id-display">Loading...</code>
+            </div>
+        </aside>
 
         <!-- Main Content Area -->
-        <main id="content-area" class="content-area">
-            <div class="text-center p-8 text-gray-500">
-                <i class="fas fa-spinner fa-spin fa-2x"></i>
-                <p class="mt-4">Initializing application...</p>
-            </div>
-        </main>
+        <div class="flex-grow">
+            <!-- Top Bar -->
+            <header class="top-bar">
+                <h1 class="text-2xl font-semibold text-gray-800" id="page-title-display">Dashboard</h1>
+                <div class="flex items-center space-x-3">
+                    <span class="text-sm font-medium text-gray-600" id="user-info-display">Loading...</span>
+                    <i class="fas fa-user-circle text-2xl text-sky-600"></i>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <main class="main-content">
+                <!-- Content is injected here by JavaScript -->
+                <div id="content-area" class="min-h-[70vh]">
+                    <div class="text-center p-12 text-gray-500">
+                        <i class="fas fa-spinner fa-spin text-4xl mb-4 text-sky-600"></i>
+                        <p class="text-lg font-medium">Loading application and connecting to Firestore...</p>
+                    </div>
+                </div>
+            </main>
+        </div>
     </div>
-</div>
 
-<!-- All Modals go here -->
+    <!-- --- MODALS --- -->
 
-<!-- 1. Add/Edit Patient Modal -->
-<div id="patientModal" class="modal">
-    <div class="modal-content">
-        <span class="close-button" onclick="closeModal('patientModal')">&times;</span>
-        <h2 id="patientModalTitle">Add New Patient</h2>
-        <form id="patientForm" class="modal-form" onsubmit="handlePatientForm(event)">
-            <input type="hidden" name="id" id="patientIdInput">
-            <div class="form-grid">
-                <div class="form-group"><label>Full Name</label><input type="text" name="full_name" required></div>
-                <div class="form-group"><label>ID Number</label><input type="text" name="id_number" required></div>
-                <div class="form-group"><label>Date of Birth</label><input type="date" name="dob" required></div>
+    <!-- Patient Modal (Add Patient) -->
+    <div id="patientModal" class="modal hidden">
+        <div class="modal-content modal-content-large">
+            <span class="modal-close-btn absolute top-4 right-4 text-gray-400 hover:text-gray-700 cursor-pointer text-2xl">&times;</span>
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">Add New Patient Record</h2>
+            <form id="patientForm" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="col-span-1 md:col-span-2 form-group">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                    <input type="text" name="fullName" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500">
+                </div>
                 <div class="form-group">
-                    <label>Gender</label>
-                    <select name="gender" required>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">ID Number</label>
+                    <input type="text" name="idNumber" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500">
+                </div>
+                <div class="form-group">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Patient Type</label>
+                    <select name="patientType" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500 bg-white">
+                        <option value="student">Student</option>
+                        <option value="faculty">Faculty</option>
+                        <option value="staff">Staff</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
+                    <input type="date" name="dob" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500">
+                </div>
+                <div class="form-group">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Gender</label>
+                    <select name="gender" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500 bg-white">
                         <option value="Male">Male</option>
                         <option value="Female">Female</option>
                         <option value="Other">Other</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Type</label>
-                    <select name="patient_type" required>
-                        <option value="student">Student</option>
-                        <option value="faculty">Faculty</option>
-                        <option value="staff">Staff</option>
-                    </select>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Course/Department</label>
+                    <input type="text" name="courseDepartment" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500">
                 </div>
-                <div class="form-group"><label>Course/Department</label><input type="text" name="course_department"></div>
-                <div class="form-group"><label>Contact Number</label><input type="tel" name="contact_number"></div>
-            </div>
-            <div class="form-group"><label>Address</label><textarea name="address" rows="2"></textarea></div>
-            <button type="submit" class="btn btn-primary mt-4 w-full" id="patientFormSubmit">Save Patient</button>
-        </form>
+                <div class="form-group">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Contact Number</label>
+                    <input type="tel" name="contactNumber" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500">
+                </div>
+                <div class="col-span-1 md:col-span-2 form-group">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Address</label>
+                    <textarea name="address" rows="2" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500"></textarea>
+                </div>
+                <div class="col-span-1 md:col-span-2 pt-4">
+                    <button type="submit" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition duration-150">
+                        <i class="fas fa-user-plus mr-2"></i>Save Patient
+                    </button>
+                </div>
+            </form>
+        </div>
     </div>
-</div>
 
-<!-- 2. Log Consultation Modal -->
-<div id="consultationModal" class="modal">
-    <div class="modal-content max-w-xl">
-        <span class="close-button" onclick="closeModal('consultationModal')">&times;</span>
-        <h2>Log New Consultation</h2>
-        <form id="consultationForm" class="modal-form space-y-4" onsubmit="handleConsultationForm(event)">
-            <input type="hidden" name="patient_id" id="consultationPatientId">
-            <input type="hidden" name="user_id" id="consultationUserId">
-
-            <!-- Patient Search -->
-            <div class="form-group">
-                <label>Search Patient</label>
-                <div class="relative-container">
-                    <input type="text" id="patient_search_consult" placeholder="Start typing patient name or ID..." autocomplete="off">
-                    <div id="patient_search_results" class="search-results hidden"></div>
+    <!-- Inventory Modal (Add Medicine) -->
+    <div id="inventoryModal" class="modal hidden">
+        <div class="modal-content">
+            <span class="modal-close-btn absolute top-4 right-4 text-gray-400 hover:text-gray-700 cursor-pointer text-2xl">&times;</span>
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">Add New Medicine</h2>
+            <form id="inventoryForm" class="space-y-4">
+                <div class="form-group">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Medicine Name</label>
+                    <input type="text" name="name" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500">
                 </div>
-                <p id="selectedPatientDisplay" class="mt-2 text-sm font-semibold text-gray-600">Selected: <span class="text-blue-600">None</span></p>
-            </div>
-
-            <div class="form-group">
-                <label>Diagnosis/Complaint</label>
-                <textarea name="diagnosis" rows="3" required placeholder="e.g., Common cold, Fever (38.5C), Sprained ankle..."></textarea>
-            </div>
-
-            <div class="form-group">
-                <label>Treatment/Notes</label>
-                <textarea name="treatment" rows="3" placeholder="e.g., Advised rest, prescribed Paracetamol, follow-up recommended..."></textarea>
-            </div>
-
-            <!-- Medicine Dispensing -->
-            <div class="border p-4 rounded-lg bg-gray-50">
-                <label class="text-lg font-bold text-gray-800 flex items-center"><i class="fas fa-pills mr-2"></i> Medicines Dispensed (Optional)</label>
-                <div id="medicineListContainer" class="space-y-3 mt-3">
-                    <!-- Medicine rows will be added here -->
+                <div class="form-group">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Description/Usage</label>
+                    <textarea name="description" rows="2" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500"></textarea>
                 </div>
-                <button type="button" onclick="addMedicineRow()" class="mt-4 w-full bg-gray-200 text-gray-700 p-2 rounded-lg hover:bg-gray-300 transition duration-150"><i class="fas fa-plus mr-1"></i> Add Medicine</button>
-            </div>
-
-            <button type="submit" class="btn btn-primary mt-6 w-full">Log Consultation</button>
-        </form>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="form-group">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Initial Stock</label>
+                        <input type="number" name="stock" value="0" min="0" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500">
+                    </div>
+                    <div class="form-group">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Unit</label>
+                        <select name="unit" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500 bg-white">
+                            <option value="tablets">Tablets</option>
+                            <option value="capsules">Capsules</option>
+                            <option value="mL">mL</option>
+                            <option value="vial">Vial</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="pt-4">
+                    <button type="submit" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition duration-150">
+                        <i class="fas fa-box-open mr-2"></i>Add to Inventory
+                    </button>
+                </div>
+            </form>
+        </div>
     </div>
-</div>
 
-<!-- 3. Add Medicine Modal -->
-<div id="medicineModal" class="modal">
-    <div class="modal-content">
-        <span class="close-button" onclick="closeModal('medicineModal')">&times;</span>
-        <h2>Add New Medicine</h2>
-        <form id="medicineForm" class="modal-form" onsubmit="handleMedicineForm(event)">
-            <div class="form-group"><label>Medicine Name</label><input type="text" name="name" required></div>
-            <div class="form-group"><label>Description/Uses</label><textarea name="description" rows="2"></textarea></div>
-            <div class="form-group"><label>Initial Stock Quantity</label><input type="number" name="stock" min="0" required></div>
-            <div class="form-group"><label>Unit (e.g., tablets, ml, vials)</label><input type="text" name="unit" required></div>
-            <div class="form-group">
-                <label class="flex items-center gap-2">
-                    <input type="checkbox" name="requires_prescription" class="w-4 h-4 text-blue-600">
-                    Requires Prescription (Schedule Drug)
-                </label>
-            </div>
-            <button type="submit" class="btn btn-primary mt-4 w-full">Save Medicine</button>
-        </form>
+    <!-- Consultation Modal (Log Consultation) -->
+    <div id="consultationModal" class="modal hidden">
+        <div class="modal-content modal-content-large">
+            <span class="modal-close-btn absolute top-4 right-4 text-gray-400 hover:text-gray-700 cursor-pointer text-2xl">&times;</span>
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">Log New Consultation</h2>
+            <form id="consultationForm" class="space-y-4">
+                <!-- Patient Search Group -->
+                <div class="form-group relative">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Search & Select Patient (Required)</label>
+                    <input type="text" id="patient_search_input" placeholder="Start typing patient name or ID..." required class="w-full p-2 border border-gray-300 rounded-t-lg focus:ring-sky-500 focus:border-sky-500">
+                    <div id="patient_search_results" class="absolute w-full mt-0 z-10"></div>
+                    <!-- Hidden inputs for selected patient data -->
+                    <input type="hidden" id="patient_id_input" name="patientId" required>
+                    <input type="hidden" id="patient_name_display" name="patientNameDisplay" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Diagnosis / Complaint</label>
+                    <input type="text" name="diagnosis" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500">
+                </div>
+                <div class="form-group">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Treatment & Notes</label>
+                    <textarea name="notes" rows="4" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500"></textarea>
+                </div>
+                <div class="pt-4">
+                    <button type="submit" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition duration-150">
+                        <i class="fas fa-calendar-check mr-2"></i>Submit Consultation
+                    </button>
+                </div>
+            </form>
+        </div>
     </div>
-</div>
 
-
-<!-- Message/Error Pop-up (Replaces alert()) -->
-<div id="messageBox" class="fixed bottom-4 right-4 p-4 text-white rounded-lg shadow-xl transition-all duration-300 transform translate-x-full z-2000" style="min-width: 300px;"></div>
-
-
-<!-- Main Application Logic (Client-Side) -->
-<script type="module">
-    // --- Firebase Imports ---
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, addDoc, serverTimestamp, setLogLevel, arrayUnion, runTransaction, orderBy, limit } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-    // --- Global Variables (Provided by Canvas Environment) ---
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-clinic-app';
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-    // --- Application State ---
-    let db, auth;
-    let userId = null;
-    let allPatients = [];
-    let allMedicines = [];
-    let currentPage = 'dashboard';
-
-    // --- Utility Functions ---
-
-    /** Shows a custom message box instead of alert() */
-    function showMessage(message, type = 'success') {
-        const box = document.getElementById('messageBox');
-        let bgColor = 'bg-green-500';
-        if (type === 'error') bgColor = 'bg-red-500';
-        if (type === 'info') bgColor = 'bg-blue-500';
-
-        box.className = 'fixed bottom-4 right-4 p-4 text-white rounded-lg shadow-xl transition-all duration-300 transform translate-x-full z-2000 ' + bgColor;
-        box.textContent = message;
-
-        // Animate in
-        setTimeout(() => box.classList.remove('translate-x-full'), 100);
-
-        // Animate out
-        setTimeout(() => box.classList.add('translate-x-full'), 3000);
-    }
-
-    /** Helper to format date and time */
-    function formatDateTime(timestamp) {
-        if (!timestamp) return 'N/A';
-        const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-        return date.toLocaleDateString('en-US', {
-            month: 'short', day: 'numeric', year: 'numeric',
-            hour: '2-digit', minute: '2-digit', hour12: true
-        });
-    }
-
-    /** Open Modal helper */
-    function openModal(modalId) {
-        const modal = document.getElementById(modalId);
-        if (modal) {
-            modal.classList.add('active');
-            modal.style.display = 'block';
-        }
-    }
-
-    /** Close Modal helper */
-    function closeModal(modalId) {
-        const modal = document.getElementById(modalId);
-        if (modal) {
-            modal.classList.remove('active');
-            // Give time for transition before hiding
-            setTimeout(() => modal.style.display = 'none', 300);
-            // Reset form if it exists
-            const form = modal.querySelector('form');
-            if (form) form.reset();
-        }
-    }
-
-    // Close modal on outside click
-    window.addEventListener('click', (event) => {
-        if (event.target.classList.contains('modal')) {
-            event.target.classList.remove('active');
-            setTimeout(() => event.target.style.display = 'none', 300);
-            const form = event.target.querySelector('form');
-            if (form) form.reset();
-        }
-    });
-
-    // --- FIREBASE INITIALIZATION & AUTH ---
-
-    async function initializeFirebase() {
-        if (Object.keys(firebaseConfig).length === 0) {
-            showMessage("Firebase Config is missing. Data persistence will not work.", 'error');
-            document.getElementById('content-area').innerHTML = '<div class="p-8 text-center text-red-600">ERROR: Firebase configuration is missing. Cannot initialize database.</div>';
-            return;
-        }
-        try {
-            setLogLevel('debug'); // Enable logging
-            const app = initializeApp(firebaseConfig);
-            db = getFirestore(app);
-            auth = getAuth(app);
-
-            // Authentication logic
-            onAuthStateChanged(auth, async (user) => {
-                if (user) {
-                    userId = user.uid;
-                } else {
-                    // Sign in anonymously if no user is found
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                }
-                document.getElementById('user-display-name').textContent = userId ? 'Clinic User' : 'Guest';
-                renderPage(currentPage); // Start rendering the app content
-                startRealtimeListeners();
-            });
-
-        } catch (error) {
-            showMessage("Firebase Initialization failed: " + error.message, 'error');
-            console.error("Firebase Initialization failed:", error);
-        }
-    }
-
-    // --- FIREBASE DATA LISTENERS (Real-Time) ---
-
-    function getCollectionPath(collectionName) {
-        // Use a "public" path for this single-user, static app demonstration
-        return `artifacts/${appId}/public/data/${collectionName}`;
-    }
-
-    function startRealtimeListeners() {
-        if (!db) return;
-
-        // 1. Patients Listener
-        onSnapshot(collection(db, getCollectionPath('patients')), (snapshot) => {
-            allPatients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            if (currentPage === 'patients') renderPage('patients'); // Re-render if on patients page
-            if (currentPage === 'dashboard') renderPage('dashboard');
-        }, (error) => {
-            console.error("Error fetching patients:", error);
-            showMessage("Error fetching patient data.", 'error');
-        });
-
-        // 2. Medicines Listener
-        onSnapshot(collection(db, getCollectionPath('medicines')), (snapshot) => {
-            allMedicines = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            if (currentPage === 'inventory') renderPage('inventory'); // Re-render if on inventory page
-            if (currentPage === 'dashboard') renderPage('dashboard');
-        }, (error) => {
-            console.error("Error fetching medicines:", error);
-            showMessage("Error fetching medicine data.", 'error');
-        });
-
-        // 3. Consultations Listener (Last 50, sorted by date)
-        const q = query(collection(db, getCollectionPath('consultations')), orderBy('consultation_date', 'desc'), limit(50));
-        onSnapshot(q, (snapshot) => {
-            const consultations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            if (currentPage === 'consultations') renderConsultationsPage(consultations);
-            if (currentPage === 'dashboard') renderDashboardPage(consultations);
-        }, (error) => {
-            console.error("Error fetching consultations:", error);
-            showMessage("Error fetching consultation data.", 'error');
-        });
-    }
-
-    // --- NAVIGATION AND RENDERING ---
-
-    document.getElementById('navigation').addEventListener('click', (e) => {
-        const link = e.target.closest('a[data-page]');
-        if (link) {
-            e.preventDefault();
-            const newPage = link.getAttribute('data-page');
-            currentPage = newPage;
-
-            // Update active state
-            document.querySelectorAll('#navigation a').forEach(a => a.classList.remove('active'));
-            link.classList.add('active');
-
-            renderPage(newPage);
-        }
-    });
-
-    function renderPage(page) {
-        const titleElement = document.getElementById('current-page-title');
-        const contentArea = document.getElementById('content-area');
-
-        titleElement.textContent = page.charAt(0).toUpperCase() + page.slice(1);
-        contentArea.innerHTML = ''; // Clear content
-
-        // Hide all modals
-        document.querySelectorAll('.modal').forEach(m => m.style.display = 'none');
-
-        if (!userId) {
-            contentArea.innerHTML = `<div class="p-8 text-center text-gray-500">Authenticating...</div>`;
-            return;
-        }
-
-        switch (page) {
-            case 'dashboard':
-                // Data listeners will trigger the renderDashboardPage with the latest data
-                break;
-            case 'patients':
-                renderPatientsPage();
-                break;
-            case 'consultations':
-                // Data listeners will trigger the renderConsultationsPage with the latest data
-                break;
-            case 'inventory':
-                renderInventoryPage();
-                break;
-            default:
-                contentArea.innerHTML = `<h2 class="text-xl font-bold">404 - Page Not Found</h2>`;
-        }
-    }
-
-    // --- PAGE RENDER FUNCTIONS ---
-
-    function renderDashboardPage(consultations = []) {
-        document.getElementById('current-page-title').textContent = 'Dashboard';
-        const totalPatients = allPatients.length;
-        const totalMedicines = allMedicines.length;
-        const lowStockMedicines = allMedicines.filter(m => m.stock < 20).length;
-        const consultationsToday = consultations.filter(c => {
-            const date = c.consultation_date.toDate ? c.consultation_date.toDate() : new Date(c.consultation_date);
-            return new Date().toDateString() === date.toDateString();
-        }).length;
-
-        const content = `
-            <h2 class="text-xl font-bold mb-4">Clinic Overview</h2>
-            <div class="stat-grid">
-                <div class="stat-card">
-                    <div class="stat-card-icon bg-blue-500"><i class="fas fa-users"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-title">Total Patients</span>
-                        <span class="stat-card-value">${totalPatients}</span>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-card-icon bg-green-500"><i class="fas fa-stethoscope"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-title">Consultations Today</span>
-                        <span class="stat-card-value">${consultationsToday}</span>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-card-icon bg-yellow-500"><i class="fas fa-pills"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-title">Total Medicines</span>
-                        <span class="stat-card-value">${totalMedicines}</span>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-card-icon bg-red-500"><i class="fas fa-exclamation-triangle"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-title">Low Stock Items</span>
-                        <span class="stat-card-value">${lowStockMedicines}</span>
-                    </div>
-                </div>
+    <!-- Confirmation Modal (replaces confirm()) -->
+    <div id="confirmationModal" class="modal hidden">
+        <div class="modal-content max-w-sm">
+            <span class="modal-close-btn absolute top-4 right-4 text-gray-400 hover:text-gray-700 cursor-pointer text-2xl">&times;</span>
+            <h2 class="text-xl font-bold mb-4 text-gray-800" id="confirmTitle">Confirm Action</h2>
+            <p class="text-gray-600 mb-6" id="confirmMessage">Are you sure you want to proceed?</p>
+            <div class="flex justify-end space-x-3">
+                <button onclick="closeModal('confirmationModal')" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-150">
+                    Cancel
+                </button>
+                <button id="confirmButton" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-150">
+                    Confirm
+                </button>
             </div>
+        </div>
+    </div>
 
-            <h2 class="text-xl font-bold mt-8 mb-4">Recent Consultations</h2>
-            ${renderConsultationsTable(consultations.slice(0, 5))}
-        `;
-        document.getElementById('content-area').innerHTML = content;
-    }
-
-    function renderPatientsPage() {
-        document.getElementById('current-page-title').textContent = 'Patient Records';
-        const content = `
-            <div class="action-bar">
-                <input type="text" id="patientSearchInput" placeholder="Search by name or ID number..." class="p-3 border rounded-lg w-full md:w-1/3">
-                <button onclick="openPatientModal()" class="btn btn-primary"><i class="fas fa-plus"></i> Add New Patient</button>
-            </div>
-            ${renderPatientsTable(allPatients)}
-        `;
-        document.getElementById('content-area').innerHTML = content;
-
-        // Add search functionality
-        document.getElementById('patientSearchInput').addEventListener('keyup', (e) => {
-            const term = e.target.value.toLowerCase();
-            const filteredPatients = allPatients.filter(p =>
-                p.full_name.toLowerCase().includes(term) || p.id_number.toLowerCase().includes(term)
-            );
-            document.getElementById('patientTableContainer').innerHTML = renderPatientsTable(filteredPatients);
-        });
-    }
-
-    function renderPatientsTable(patients) {
-        const rows = patients.map(p => `
-            <tr>
-                <td>${p.id_number}</td>
-                <td>${p.full_name}</td>
-                <td>${p.patient_type.charAt(0).toUpperCase() + p.patient_type.slice(1)}</td>
-                <td>${p.course_department || 'N/A'}</td>
-                <td>
-                    <button onclick="openPatientModal('${p.id}')" class="text-blue-500 hover:text-blue-700 mr-2"><i class="fas fa-edit"></i> Edit</button>
-                    <button onclick="deleteDocument('patients', '${p.id}', '${p.full_name}')" class="text-red-500 hover:text-red-700"><i class="fas fa-trash"></i> Delete</button>
-                </td>
-            </tr>
-        `).join('');
-
-        return `
-            <div id="patientTableContainer">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>ID Number</th>
-                            <th>Full Name</th>
-                            <th>Type</th>
-                            <th>Course/Department</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rows.length > 0 ? rows : '<tr><td colspan="5" class="text-center text-gray-500">No patient records found.</td></tr>'}
-                    </tbody>
-                </table>
-            </div>
-        `;
-    }
-
-    function renderConsultationsPage(consultations) {
-        document.getElementById('current-page-title').textContent = 'Consultations';
-        const content = `
-            <div class="action-bar">
-                <input type="text" id="consultationSearchInput" placeholder="Search by patient name or diagnosis..." class="p-3 border rounded-lg w-full md:w-1/3">
-                <button onclick="openConsultationModal()" class="btn btn-primary"><i class="fas fa-plus"></i> Log New Consultation</button>
-            </div>
-            ${renderConsultationsTable(consultations)}
-        `;
-        document.getElementById('content-area').innerHTML = content;
-
-        // Add search functionality (Note: This is basic client-side search on the fetched 50 records)
-        document.getElementById('consultationSearchInput').addEventListener('keyup', (e) => {
-            const term = e.target.value.toLowerCase();
-            const filteredConsultations = consultations.filter(c =>
-                c.patient_name.toLowerCase().includes(term) || c.diagnosis.toLowerCase().includes(term)
-            );
-            document.getElementById('consultationTableContainer').innerHTML = renderConsultationsTable(filteredConsultations);
-        });
-    }
-
-    function renderConsultationsTable(consultations) {
-        const rows = consultations.map(c => `
-            <tr>
-                <td>${formatDateTime(c.consultation_date)}</td>
-                <td>${c.patient_name}</td>
-                <td>${c.diagnosis.substring(0, 50)}...</td>
-                <td>${c.user_name}</td>
-                <td>
-                    <button onclick="viewConsultationDetails('${c.id}')" class="text-blue-500 hover:text-blue-700"><i class="fas fa-eye"></i> View</button>
-                </td>
-            </tr>
-        `).join('');
-
-        return `
-            <div id="consultationTableContainer">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Patient Name</th>
-                            <th>Diagnosis (Snippet)</th>
-                            <th>Consulted By</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rows.length > 0 ? rows : '<tr><td colspan="5" class="text-center text-gray-500">No consultations found.</td></tr>'}
-                    </tbody>
-                </table>
-            </div>
-        `;
-    }
-
-    function renderInventoryPage() {
-        document.getElementById('current-page-title').textContent = 'Medicine Inventory';
-        const content = `
-            <div class="action-bar">
-                <input type="text" id="medicineSearchInput" placeholder="Search medicine name..." class="p-3 border rounded-lg w-full md:w-1/3">
-                <button onclick="openModal('medicineModal')" class="btn btn-primary"><i class="fas fa-plus"></i> Add New Medicine</button>
-            </div>
-            ${renderInventoryTable(allMedicines)}
-        `;
-        document.getElementById('content-area').innerHTML = content;
-
-        // Add search functionality
-        document.getElementById('medicineSearchInput').addEventListener('keyup', (e) => {
-            const term = e.target.value.toLowerCase();
-            const filteredMedicines = allMedicines.filter(m =>
-                m.name.toLowerCase().includes(term) || m.description.toLowerCase().includes(term)
-            );
-            document.getElementById('inventoryTableContainer').innerHTML = renderInventoryTable(filteredMedicines);
-        });
-    }
-
-    function renderInventoryTable(medicines) {
-        const rows = medicines.map(m => `
-            <tr class="${m.stock < 20 ? 'bg-red-50 text-red-700' : ''}">
-                <td class="font-semibold">${m.name}</td>
-                <td>${m.description.substring(0, 50)}...</td>
-                <td><span class="${m.stock < 20 ? 'font-bold' : ''}">${m.stock} ${m.unit}</span></td>
-                <td>${m.requires_prescription ? '<span class="text-red-500 font-semibold">Yes</span>' : 'No'}</td>
-                <td>
-                    <button onclick="adjustStock('${m.id}', '${m.name}', 1)" class="text-green-500 hover:text-green-700 mr-2"><i class="fas fa-plus-circle"></i> Add</button>
-                    <button onclick="adjustStock('${m.id}', '${m.name}', -1)" class="text-yellow-500 hover:text-yellow-700 mr-2"><i class="fas fa-minus-circle"></i> Dispense</button>
-                    <button onclick="deleteDocument('medicines', '${m.id}', '${m.name}')" class="text-red-500 hover:text-red-700"><i class="fas fa-trash"></i> Delete</button>
-                </td>
-            </tr>
-        `).join('');
-
-        return `
-            <div id="inventoryTableContainer">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Description</th>
-                            <th>Stock</th>
-                            <th>Requires Rx</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rows.length > 0 ? rows : '<tr><td colspan="5" class="text-center text-gray-500">No medicines found.</td></tr>'}
-                    </tbody>
-                </table>
-            </div>
-        `;
-    }
-
-    // --- CRUD HANDLERS ---
-
-    // 1. Patient CRUD
-    async function handlePatientForm(event) {
-        event.preventDefault();
-        const form = event.target;
-        const data = Object.fromEntries(new FormData(form).entries());
-        const patientId = data.id;
-
-        const docRef = patientId ? doc(db, getCollectionPath('patients'), patientId) : collection(db, getCollectionPath('patients'));
-
-        try {
-            if (patientId) {
-                await updateDoc(docRef, data);
-                showMessage(`Patient ${data.full_name} updated successfully!`);
-            } else {
-                await addDoc(docRef, data);
-                showMessage(`Patient ${data.full_name} added successfully!`);
-            }
-            closeModal('patientModal');
-        } catch (e) {
-            console.error("Error saving patient:", e);
-            showMessage("Error saving patient. Check console for details.", 'error');
-        }
-    }
-
-    window.openPatientModal = async function(patientId = null) {
-        const modalTitle = document.getElementById('patientModalTitle');
-        const submitButton = document.getElementById('patientFormSubmit');
-        const form = document.getElementById('patientForm');
-        form.reset();
-        document.getElementById('patientIdInput').value = '';
-
-        if (patientId) {
-            modalTitle.textContent = 'Edit Patient Record';
-            submitButton.textContent = 'Update Patient';
-            const patient = allPatients.find(p => p.id === patientId);
-            if (patient) {
-                document.getElementById('patientIdInput').value = patient.id;
-                // Populate form fields
-                for (const key in patient) {
-                    const input = form.elements[key];
-                    if (input) input.value = patient[key];
-                }
-            }
-        } else {
-            modalTitle.textContent = 'Add New Patient';
-            submitButton.textContent = 'Save Patient';
-        }
-        openModal('patientModal');
-    }
-
-    // 2. Medicine CRUD
-    async function handleMedicineForm(event) {
-        event.preventDefault();
-        const form = event.target;
-        const data = Object.fromEntries(new FormData(form).entries());
-
-        data.stock = parseInt(data.stock, 10);
-        data.requires_prescription = !!data.requires_prescription;
-
-        try {
-            await addDoc(collection(db, getCollectionPath('medicines')), data);
-            showMessage(`Medicine ${data.name} added successfully!`);
-            closeModal('medicineModal');
-        } catch (e) {
-            console.error("Error adding medicine:", e);
-            showMessage("Error adding medicine. Check console for details.", 'error');
-        }
-    }
-
-    window.adjustStock = async function(medicineId, name, delta) {
-        const docRef = doc(db, getCollectionPath('medicines'), medicineId);
-        const medicine = allMedicines.find(m => m.id === medicineId);
-
-        if (!medicine) {
-            showMessage("Medicine not found.", 'error');
-            return;
-        }
-
-        const newStock = medicine.stock + delta;
-        if (newStock < 0) {
-            showMessage(`Cannot dispense. Only ${medicine.stock} ${medicine.unit} of ${name} remain.`, 'info');
-            return;
-        }
-
-        try {
-            await updateDoc(docRef, { stock: newStock });
-            const action = delta > 0 ? 'added to' : 'dispensed from';
-            showMessage(`${Math.abs(delta)} ${medicine.unit} of ${name} ${action} stock.`);
-        } catch (e) {
-            console.error("Error adjusting stock:", e);
-            showMessage("Error adjusting stock. Check console for details.", 'error');
-        }
-    }
-
-    // 3. Consultation CRUD
-    window.openConsultationModal = function() {
-        // Reset form and UI elements
-        document.getElementById('consultationForm').reset();
-        document.getElementById('consultationPatientId').value = '';
-        document.getElementById('selectedPatientDisplay').innerHTML = 'Selected: <span class="text-blue-600">None</span>';
-        document.getElementById('consultationUserId').value = userId; // Set current user ID
-        document.getElementById('medicineListContainer').innerHTML = '';
-        addMedicineRow(); // Add an initial empty row
-
-        // Setup patient search
-        setupPatientSearchForConsultation();
-
-        openModal('consultationModal');
-    }
-
-    window.handleConsultationForm = async function(event) {
-        event.preventDefault();
-        const form = event.target;
-        const data = Object.fromEntries(new FormData(form).entries());
-
-        const patientId = data.patient_id;
-        if (!patientId) {
-            showMessage("Please select a patient first.", 'info');
-            return;
-        }
-
-        const selectedPatient = allPatients.find(p => p.id === patientId);
-        if (!selectedPatient) {
-            showMessage("Selected patient data is invalid.", 'error');
-            return;
-        }
-
-        // Gather dispensed medicines
-        const medicineRows = Array.from(document.querySelectorAll('#medicineListContainer > div'));
-        const dispensedMedicines = [];
-        for (const row of medicineRows) {
-            const medId = row.querySelector('[data-med-id]').value;
-            const quantityInput = row.querySelector('[data-quantity]');
-            const quantity = parseInt(quantityInput.value, 10) || 0;
-
-            if (medId && quantity > 0) {
-                const medicine = allMedicines.find(m => m.id === medId);
-                if (medicine) {
-                    if (quantity > medicine.stock) {
-                        showMessage(`Cannot dispense ${quantity} of ${medicine.name}. Only ${medicine.stock} in stock.`, 'error');
-                        return; // Stop submission
-                    }
-                    dispensedMedicines.push({ id: medId, name: medicine.name, quantity: quantity, unit: medicine.unit });
-                }
-            }
-        }
-
-        const consultationData = {
-            patient_id: patientId,
-            patient_name: selectedPatient.full_name,
-            diagnosis: data.diagnosis,
-            treatment: data.treatment,
-            user_id: userId,
-            user_name: 'Clinic User', // Hardcoded for this demo
-            consultation_date: serverTimestamp(),
-            medicines_dispensed: dispensedMedicines
-        };
-
-        try {
-            await runTransaction(db, async (transaction) => {
-                // 1. Log the consultation
-                transaction.set(doc(collection(db, getCollectionPath('consultations'))), consultationData);
-
-                // 2. Update medicine stock
-                for (const med of dispensedMedicines) {
-                    const medRef = doc(db, getCollectionPath('medicines'), med.id);
-                    const currentMedicine = allMedicines.find(m => m.id === med.id); // Use locally cached data for current stock
-                    if (currentMedicine) {
-                        const newStock = currentMedicine.stock - med.quantity;
-                        transaction.update(medRef, { stock: newStock });
-                    }
-                }
-            });
-
-            showMessage(`Consultation for ${selectedPatient.full_name} logged and inventory updated!`);
-            closeModal('consultationModal');
-
-        } catch (e) {
-            console.error("Transaction failed:", e);
-            showMessage("Failed to log consultation and update inventory. Check console.", 'error');
-        }
-    }
-
-    window.viewConsultationDetails = function(consultationId) {
-        const consultation = allConsultations.find(c => c.id === consultationId);
-        if (!consultation) {
-            showMessage("Consultation record not found.", 'error');
-            return;
-        }
-
-        // Simple custom modal/view for details (reusing existing modal structure concept)
-        const detailsHtml = `
-            <div class="space-y-4">
-                <p><strong>Date:</strong> ${formatDateTime(consultation.consultation_date)}</p>
-                <p><strong>Patient:</strong> ${consultation.patient_name}</p>
-                <p><strong>Consulted By:</strong> ${consultation.user_name}</p>
-                <div class="p-3 bg-gray-100 rounded-lg">
-                    <h4 class="font-semibold text-gray-700">Diagnosis/Complaint</h4>
-                    <p class="whitespace-pre-wrap">${consultation.diagnosis}</p>
-                </div>
-                <div class="p-3 bg-gray-100 rounded-lg">
-                    <h4 class="font-semibold text-gray-700">Treatment/Notes</h4>
-                    <p class="whitespace-pre-wrap">${consultation.treatment}</p>
-                </div>
-                <div>
-                    <h4 class="font-bold text-gray-800 border-b pb-1">Medicines Dispensed</h4>
-                    ${consultation.medicines_dispensed && consultation.medicines_dispensed.length > 0
-                        ? `<ul class="list-disc list-inside mt-2">${consultation.medicines_dispensed.map(m => `<li>${m.quantity} ${m.unit} of ${m.name}</li>`).join('')}</ul>`
-                        : '<p class="text-gray-500">None dispensed.</p>'
-                    }
-                </div>
-            </div>
-        `;
-
-        // Create a temporary "view" modal
-        const tempModal = document.getElementById('viewDetailsModal') || document.createElement('div');
-        tempModal.id = 'viewDetailsModal';
-        tempModal.className = 'modal active';
-        tempModal.innerHTML = `
-            <div class="modal-content max-w-xl">
-                <span class="close-button" onclick="closeModal('viewDetailsModal')">&times;</span>
-                <h2 class="text-2xl font-bold mb-4">Consultation Details</h2>
-                ${detailsHtml}
-            </div>
-        `;
-        document.body.appendChild(tempModal);
-        openModal('viewDetailsModal');
-    }
-
-    // 4. Generic Delete Function
-    window.deleteDocument = async function(collectionName, id, name) {
-        if (!confirm(`Are you sure you want to delete ${collectionName.slice(0, -1)}: ${name}? This cannot be undone.`)) {
-            return;
-        }
-        try {
-            await deleteDoc(doc(db, getCollectionPath(collectionName), id));
-            showMessage(`${collectionName.slice(0, -1)} ${name} deleted successfully!`);
-        } catch (e) {
-            console.error(`Error deleting ${collectionName.slice(0, -1)}:`, e);
-            showMessage(`Error deleting ${collectionName.slice(0, -1)}. Check console.`, 'error');
-        }
-    }
-
-
-    // --- Consultation Modal Helpers ---
-
-    let allConsultations = [];
-    const consultQuery = query(collection(db, getCollectionPath('consultations')), orderBy('consultation_date', 'desc'), limit(50));
-    onSnapshot(consultQuery, (snapshot) => {
-        allConsultations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    });
-
-    function setupPatientSearchForConsultation() {
-        const input = document.getElementById('patient_search_consult');
-        const resultsDiv = document.getElementById('patient_search_results');
-        const patientIdInput = document.getElementById('consultationPatientId');
-        const display = document.getElementById('selectedPatientDisplay');
-
-        input.onkeyup = (e) => {
-            const term = e.target.value.toLowerCase();
-            if (term.length < 2) {
-                resultsDiv.classList.add('hidden');
-                resultsDiv.innerHTML = '';
-                return;
-            }
-
-            const filtered = allPatients.filter(p =>
-                p.full_name.toLowerCase().includes(term) || p.id_number.toLowerCase().includes(term)
-            );
-
-            resultsDiv.innerHTML = filtered.map(p =>
-                `<div class="search-result-item" data-id="${p.id}" data-name="${p.full_name}">
-                    ${p.full_name} (${p.id_number})
-                </div>`
-            ).join('') || '<div class="p-3 text-gray-500 text-sm">No patients found.</div>';
-
-            resultsDiv.classList.remove('hidden');
-        };
-
-        resultsDiv.onclick = (e) => {
-            const item = e.target.closest('.search-result-item');
-            if (item) {
-                patientIdInput.value = item.dataset.id;
-                display.innerHTML = `Selected: <span class="text-blue-600">${item.dataset.name}</span>`;
-                input.value = item.dataset.name;
-                resultsDiv.classList.add('hidden');
-            }
-        };
-
-        // Hide results when clicking outside
-        document.addEventListener('click', (e) => {
-            if (!e.target.closest('.relative-container')) {
-                resultsDiv.classList.add('hidden');
-            }
-        });
-    }
-
-    window.addMedicineRow = function() {
-        const container = document.getElementById('medicineListContainer');
-        const rowId = 'med-row-' + Date.now();
-        const row = document.createElement('div');
-        row.id = rowId;
-        row.className = 'flex gap-2 items-end';
-
-        const options = allMedicines.map(m =>
-            `<option value="${m.id}" data-unit="${m.unit}">${m.name} (Stock: ${m.stock} ${m.unit})</option>`
-        ).join('');
-
-        row.innerHTML = `
-            <div class="flex-grow">
-                <label class="text-xs font-medium text-gray-600">Medicine Name</label>
-                <select data-med-id class="w-full p-2 border rounded-lg">
-                    <option value="">-- Select Medicine --</option>
-                    ${options}
-                </select>
-            </div>
-            <div class="w-24">
-                <label class="text-xs font-medium text-gray-600">Qty</label>
-                <input type="number" data-quantity value="1" min="1" class="w-full p-2 border rounded-lg">
-            </div>
-            <button type="button" onclick="document.getElementById('${rowId}').remove()" class="p-2 text-red-500 hover:text-red-700">
-                <i class="fas fa-times"></i>
-            </button>
-        `;
-        container.appendChild(row);
-    }
-
-    window.signOutApp = function() {
-        signOut(auth).then(() => {
-            showMessage("Signed out. Reauthenticating anonymously...", 'info');
-            // Re-initialize to trigger the anonymous sign-in flow
-            initializeFirebase();
-        }).catch((error) => {
-            console.error("Sign out error:", error);
-        });
-    }
-
-    // --- START APP ---
-    initializeFirebase();
-
-</script>
-
-    <script type="module" src="./firebase_app.js"></script>
 </body>
 </html>
