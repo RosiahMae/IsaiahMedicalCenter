@@ -41,9 +41,22 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
+        // --- HARDCODED CONFIGURATION for GitHub Pages DEPLOYMENT ---
+        // These values are required for the app to run outside the Canvas environment.
+        const YOUR_FIREBASE_CONFIG = {
+            apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
+            authDomain: "clinic-system-1579b.firebaseapp.com",
+            projectId: "clinic-system-1579b",
+            storageBucket: "clinic-system-1579b.firebasestorage.app",
+            messagingSenderId: "211282606869",
+            appId: "1:211282606869:web:853ddeee9ddba036b1c71c",
+            measurementId: "G-B2GSH85BMT"
+        };
+        
         // Global variables provided by the Canvas environment
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'clinic-default-app';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        // Use environment config if available (Canvas), otherwise use the hardcoded one (GitHub Pages)
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : YOUR_FIREBASE_CONFIG; 
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         const statusMessage = document.getElementById('status-message');
@@ -98,9 +111,10 @@
                 statusMessage.textContent = "Seeding initial roles and inventory (One-time setup)...";
 
                 // A. Seed Roles
+                // The current user's UID will be the Admin's UID.
                 const rolesData = [
                     { uid: adminUid, role: "admin", name: "System Admin (Me)" },
-                    // Placeholder UIDs for nurses. The current logged-in user's UID will be the admin's key.
+                    // Placeholder UIDs for nurses (needed since they don't have a token to log in with yet)
                     { uid: `nurse_anne_margarette`, role: "nurse", name: "Anne Margarette" },
                     { uid: `nurse_ambe_ilona`, role: "nurse", name: "Ambe Ilona" },
                 ];
@@ -136,8 +150,9 @@
                 statusMessage.textContent = `Login successful. Redirecting as ${userRole.toUpperCase()}...`;
                 window.location.href = 'dashboard.html';
             } else {
-                // This path should ideally not be hit if data seeding worked
-                errorMessage.textContent = 'Error: Your user ID is not configured with a role. Please contact the Admin.';
+                // If the user logs in anonymously (GitHub Pages default) and doesn't have a seeded role,
+                // we tell them they need to be configured.
+                errorMessage.textContent = 'Error: Your user ID is not configured with a role (admin/nurse). Please contact the System Admin.';
                 errorMessage.classList.remove('hidden');
                 loadingSpinner.classList.add('hidden');
             }
@@ -146,6 +161,7 @@
         // --- Initialization ---
 
         function initFirebase() {
+            // After hardcoding, this check is now mostly for safety, but it won't be null on GitHub Pages
             if (!firebaseConfig) {
                 errorMessage.textContent = "Error: Firebase configuration not found.";
                 errorMessage.classList.remove('hidden');
@@ -175,11 +191,12 @@
                     } else {
                         statusMessage.textContent = "Attempting sign-in...";
                         
-                        // 3. Authenticate using the token (preferred) or anonymously (fallback)
+                        // 3. Authenticate using the token (Canvas) or anonymously (GitHub Pages)
                         try {
                             if (initialAuthToken) {
                                 await signInWithCustomToken(auth, initialAuthToken);
                             } else {
+                                // This is the path taken on GitHub Pages, granting an anonymous UID
                                 await signInAnonymously(auth);
                             }
                         } catch (e) {
