@@ -119,25 +119,36 @@
             if (rolesSnapshot.empty) {
                 statusMessage.textContent = "Seeding initial roles and inventory (One-time setup)...";
 
-                // A. Seed Roles - Admin now uses a fixed key
-                const rolesData = [
-                    { uid: ADMIN_KEY, role: "admin", name: "System Admin (Me)" },
-                    { uid: `nurse_anne_margarette`, role: "nurse", name: "Anne Margarette" },
-                    { uid: `nurse_ambe_ilona`, role: "nurse", name: "Ambe Ilona" },
-                ];
-                
-                for (const role of rolesData) {
-                    await setDoc(doc(rolesCollectionRef, role.uid), { role: role.role, name: role.name });
-                }
+                try {
+                    // A. Seed Roles - Admin now uses a fixed key
+                    const rolesData = [
+                        { uid: ADMIN_KEY, role: "admin", name: "System Admin (Me)" },
+                        { uid: `nurse_anne_margarette`, role: "nurse", name: "Anne Margarette" },
+                        { uid: `nurse_ambe_ilona`, role: "nurse", name: "Ambe Ilona" },
+                    ];
+                    
+                    for (const role of rolesData) {
+                        await setDoc(doc(rolesCollectionRef, role.uid), { role: role.role, name: role.name });
+                    }
 
-                // B. Seed Inventory (50 items)
-                const inventoryData = generateInventory();
-                for (const id in inventoryData) {
-                    await setDoc(doc(inventoryCollectionRef, inventoryData[id].id), inventoryData[id]);
-                }
+                    // B. Seed Inventory (50 items)
+                    const inventoryData = generateInventory();
+                    for (const id in inventoryData) {
+                        await setDoc(doc(inventoryCollectionRef, inventoryData[id].id), inventoryData[id]);
+                    }
 
-                statusMessage.textContent = "Data seeding complete. Please proceed to login.";
+                    statusMessage.textContent = "Data seeding complete. Please proceed to login.";
+                } catch (e) {
+                    console.error("Seeding Failed:", e);
+                    // Display the error prominently if the seeding fails
+                    errorMessage.textContent = `CRITICAL: Initial data seeding failed. Please check your Firestore Security Rules. Error: ${e.message}`;
+                    errorMessage.classList.remove('hidden');
+                    // Prevent login form from showing if we can't seed the roles
+                    loadingSpinner.classList.add('hidden');
+                    return false; // Seeding failed
+                }
             }
+            return true; // Seeding was skipped or succeeded
         }
 
         async function checkUserRoleAndRedirect(uidToCheck) {
@@ -163,13 +174,15 @@
                 statusMessage.textContent = `Login successful. Redirecting as ${roleDoc.data().name.toUpperCase()}...`;
                 window.location.href = 'dashboard.html';
             } else {
-                errorMessage.textContent = `Error: User ID/Key "${cleanUid}" not found or not configured with a role (admin/nurse).`;
+                errorMessage.textContent = `Error: User ID/Key "${cleanUid}" not found or not configured with a role (admin/nurse). This key must exist in the 'roles' collection.`;
                 errorMessage.classList.remove('hidden');
+                loginButton.disabled = false;
             }
         }
         
         function handleLoginAttempt() {
             errorMessage.classList.add('hidden');
+            loginButton.disabled = true;
             const enteredId = userIdInput.value;
             
             // If the input is empty, default to the fixed Admin key
@@ -203,13 +216,15 @@
                         statusMessage.textContent = `Authenticated (Ready to check ID).`;
                         
                         // 2. Seed data: Run seeding logic
-                        await seedInitialData();
+                        const seedSuccess = await seedInitialData();
                         
-                        loadingSpinner.classList.add('hidden');
-                        loginForm.classList.remove('hidden');
-                        
-                        // 3. Attach the new login handler
-                        loginButton.onclick = handleLoginAttempt;
+                        if (seedSuccess) {
+                            loadingSpinner.classList.add('hidden');
+                            loginForm.classList.remove('hidden');
+                            
+                            // 3. Attach the new login handler
+                            loginButton.onclick = handleLoginAttempt;
+                        }
                         
                     } else {
                         statusMessage.textContent = "Attempting sign-in...";
