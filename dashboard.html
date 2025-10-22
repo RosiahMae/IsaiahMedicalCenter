@@ -234,7 +234,7 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc, deleteDoc, updateDoc, 
-            serverTimestamp, where
+            serverTimestamp, where, getDoc
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
         // --- GLOBAL VARIABLES & INITIALIZATION ---
@@ -244,7 +244,7 @@
         
         let db, auth;
         let currentUserId = null;
-        let currentUserRole = 'Staff'; // Default role
+        let currentUserRole = 'Nurse'; // Default role set to Nurse
         let isAuthReady = false;
 
         // --- UI ELEMENTS ---
@@ -280,13 +280,8 @@
 
         /** Ensures user is logged in, otherwise redirects to login page. */
         function checkAuthAndRedirect() {
-            // Note: This is a basic client-side check. Final Auth status is confirmed by onAuthStateChanged.
-            const user = auth?.currentUser;
-            if (!user && window.location.pathname.endsWith('/dashboard.html')) {
-                // If not logged in and on the dashboard, redirect to index.html
-                // This will be superseded by the onAuthStateChanged logic below, 
-                // but provides a fallback if the token is already expired.
-            }
+            // Note: The onAuthStateChanged listener handles the final redirection check.
+            // This function exists mainly as a conceptual placeholder if used outside the listener.
         }
 
         // --- FIREBASE PATH HELPERS ---
@@ -314,13 +309,8 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                // Start Authentication Process
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
-
+                // Check and sign in using existing auth state from index.html
+                
                 // Auth State Listener
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
@@ -333,7 +323,7 @@
                         // Start real-time listeners only once authenticated
                         startRealTimeListeners();
                     } else {
-                        // Not authenticated or signed out
+                        // User somehow lost authentication or signed out, redirect back to login
                         window.location.href = 'index.html';
                     }
                 });
@@ -359,22 +349,22 @@
             // 1. Listen for Current User's Role (Private Data)
             onSnapshot(doc(db, getUserPrivateCollectionPath('roles'), currentUserId), (docSnapshot) => {
                 if (docSnapshot.exists()) {
-                    currentUserRole = docSnapshot.data().role || 'Staff';
+                    // Default to 'Nurse' if role field is missing or invalid
+                    currentUserRole = docSnapshot.data().role === 'Admin' ? 'Admin' : 'Nurse';
                 } else {
-                    // Initialize user role if it doesn't exist (default to Staff)
-                    setDoc(doc(db, getUserPrivateCollectionPath('roles'), currentUserId), { role: 'Staff' });
-                    currentUserRole = 'Staff';
+                    // Initialize user role if it doesn't exist (default to Nurse)
+                    setDoc(doc(db, getUserPrivateCollectionPath('roles'), currentUserId), { role: 'Nurse' });
+                    currentUserRole = 'Nurse';
                 }
                 userRoleDisplay.textContent = currentUserRole;
                 // Show/Hide Admin Card based on role
                 adminManagementCard.classList.toggle('hidden', currentUserRole !== 'Admin');
-                alertBox(`Your role is set to: ${currentUserRole}`, 2000);
                 
                 // Also update User Role Management List (Admin only feature)
                 if (currentUserRole === 'Admin') {
                     listenToAllUserRoles();
                 } else {
-                    document.getElementById('user-role-management-list').innerHTML = '<p class="text-sm text-gray-500">Feature disabled for Staff users.</p>';
+                    document.getElementById('user-role-management-list').innerHTML = '<p class="text-sm text-gray-500">Feature disabled for Nurse users.</p>';
                 }
             });
 
@@ -405,8 +395,6 @@
 
         // 6. Listen for ALL User Roles (Admin only)
         function listenToAllUserRoles() {
-            // Note: This listens to the *public* artifact space to find all users who have an entry.
-            // This is an imperfect but pragmatic way to list other users in a multi-user environment.
             const userRolesPath = `artifacts/${appId}/users`;
             onSnapshot(collection(db, userRolesPath), async (snapshot) => {
                 const userListContainer = document.getElementById('user-role-management-list');
@@ -417,21 +405,25 @@
                     return;
                 }
 
-                snapshot.forEach(async (userDoc) => {
+                const usersDataPromises = snapshot.docs.map(async (userDoc) => {
                     const userId = userDoc.id; // This is the user ID
 
                     // Fetch the actual role document inside the user's private space
                     // Path: artifacts/{appId}/users/{userId}/roles/{userId}
-                    const roleDocRef = doc(db, getUserPrivateCollectionPath('roles').replace(currentUserId, userId), userId);
+                    const roleDocRef = doc(db, userRolesPath, userId, 'roles', userId);
                     
                     try {
                         const roleSnapshot = await getDoc(roleDocRef);
-                        const role = roleSnapshot.exists() ? roleSnapshot.data().role : 'Staff';
-                        renderUserRoleItem(userId, role);
+                        const role = roleSnapshot.exists() ? (roleSnapshot.data().role === 'Admin' ? 'Admin' : 'Nurse') : 'Nurse';
+                        return { userId, role };
                     } catch (e) {
                         console.error(`Could not fetch role for user ${userId}:`, e);
+                        return { userId, role: 'Error' };
                     }
                 });
+
+                const usersData = await Promise.all(usersDataPromises);
+                usersData.forEach(data => renderUserRoleItem(data.userId, data.role));
 
             }, (error) => console.error("Error listening to user roles:", error));
         }
@@ -573,7 +565,7 @@
                         class="bg-white border border-gray-300 text-gray-700 py-1 px-2 rounded-lg text-xs shadow-sm"
                         ${isCurrentUser ? 'disabled' : ''}
                     >
-                        <option value="Staff" ${role === 'Staff' ? 'selected' : ''}>Staff</option>
+                        <option value="Nurse" ${role === 'Nurse' ? 'selected' : ''}>Nurse</option>
                         <option value="Admin" ${role === 'Admin' ? 'selected' : ''}>Admin</option>
                     </select>
                 </div>
@@ -647,6 +639,7 @@
             }
 
             try {
+                // Use a normalized name as the document ID for easy lookup and uniqueness
                 await setDoc(doc(db, getPublicCollectionPath('inventory'), name.toLowerCase().replace(/\s/g, '-')), {
                     name: name,
                     stock: stock
@@ -741,7 +734,7 @@
                     filerId: currentUserId
                 });
                 
-                // Set patient status to Discharged after filing report (optional, but good workflow)
+                // Set patient status to Discharged after filing report
                 const patientDocRef = doc(db, getUserPrivateCollectionPath('patients'), patientId);
                 await updateDoc(patientDocRef, { status: 'Discharged' });
 
@@ -781,7 +774,7 @@
             
             try {
                 // Path: artifacts/{appId}/users/{userId}/roles/{userId}
-                const roleDocRef = doc(db, getUserPrivateCollectionPath('roles').replace(currentUserId, userId), userId);
+                const roleDocRef = doc(db, `artifacts/${appId}/users/${userId}/roles`, userId);
                 await setDoc(roleDocRef, { role: newRole }, { merge: true });
                 alertBox(`Role for user ${userId.substring(0, 4)}... updated to ${newRole}.`, 3000);
             } catch (e) {
@@ -825,7 +818,7 @@
         });
 
         // 1. Initial Auth Check (before Firebase is even initialized)
-        checkAuthAndRedirect(); // This is just a quick pre-check
+        checkAuthAndRedirect();
 
         // 2. Initialize Firebase and listeners on window load
         window.onload = initFirebase;
