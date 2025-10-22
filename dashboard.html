@@ -238,10 +238,30 @@
             serverTimestamp
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
+        // Hardcoded Firebase Config (Fallback for local testing)
+        const HARDCODED_FIREBASE_CONFIG = {
+            apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
+            authDomain: "clinic-system-1579b.firebaseapp.com",
+            projectId: "clinic-system-1579b",
+            storageBucket: "clinic-system-1579b.firebasestorage.app",
+            messagingSenderId: "211282606869",
+            appId: "1:211282606869:web:853ddeee9ddba036b1c71c",
+            measurementId: "G-B2GSH85BMT"
+        };
+        
         // --- GLOBAL VARIABLES & SESSION RETRIEVAL ---
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'clinic-default-app';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
         
+        // Load config from environment or use the hardcoded fallback
+        let firebaseConfig = HARDCODED_FIREBASE_CONFIG;
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+             try {
+                firebaseConfig = JSON.parse(__firebase_config);
+             } catch (e) {
+                console.warn("Could not parse environment __firebase_config, using hardcoded fallback.");
+             }
+        }
+
         let db, auth;
         // Retrieve the authenticated user's details from sessionStorage (set by index.html)
         const currentFirebaseUid = sessionStorage.getItem('clinic_auth_uid');
@@ -286,7 +306,10 @@
         function checkAuthAndRedirect() {
             if (!currentFirebaseUid || !currentUserKey) {
                 console.error("Session key or UID missing. Redirecting.");
-                window.location.href = 'index.html';
+                // Redirect only if Firebase is not yet initialized and session is invalid
+                if (!isAuthReady) {
+                    window.location.href = 'index.html';
+                }
                 return false;
             }
             return true;
@@ -305,10 +328,12 @@
         // --- AUTH AND INITIALIZATION ---
 
         async function initFirebase() {
+            // Check session before starting initialization
             if (!checkAuthAndRedirect()) return;
 
-            if (!firebaseConfig) {
-                errorText.textContent = "Firebase configuration is missing. Cannot initialize application.";
+            // Check if we have a valid configuration object (either hardcoded or environment)
+            if (!firebaseConfig || !firebaseConfig.apiKey) {
+                errorText.textContent = "Firebase configuration is missing or invalid. Cannot initialize application.";
                 errorAlert.classList.remove('hidden');
                 loadingStatus.classList.add('hidden');
                 return;
@@ -331,7 +356,8 @@
                 startRealTimeListeners();
 
                 signOutBtn.addEventListener('click', async () => {
-                    await signOut(auth);
+                    // Firebase sign out is often optional if using anonymous auth, but good practice
+                    if(auth.currentUser) await signOut(auth); 
                     sessionStorage.clear(); // Clear session data on sign out
                     window.location.href = 'index.html';
                 });
