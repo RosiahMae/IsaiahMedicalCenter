@@ -141,7 +141,8 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, query, onSnapshot, doc, updateDoc, addDoc, serverTimestamp, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // CRITICAL FIX: Added getDocs to the imports for one-time collection fetch check
+        import { getFirestore, collection, query, onSnapshot, doc, updateDoc, addDoc, serverTimestamp, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- HARDCODED CONFIGURATION (MUST MATCH index.html) ---
         const YOUR_FIREBASE_CONFIG = {
@@ -171,7 +172,7 @@
             roles: [],
             globalTasks: [], 
             patients: [], 
-            consultations: [], // NEW: Consultation reports
+            consultations: [], // Consultation reports
         };
 
         let db = null;
@@ -180,7 +181,7 @@
         let unsubscribeRoles = () => {};
         let unsubscribeTasks = () => {}; 
         let unsubscribePatients = () => {};
-        let unsubscribeConsultations = () => {}; // NEW
+        let unsubscribeConsultations = () => {};
 
         // --- FIRESTORE PATHS ---
         const getInventoryCollectionRef = () => collection(db, `artifacts/${clinicAppId}/public/data/inventory`);
@@ -288,7 +289,7 @@
                 window.alertBox("Error fetching patient data.", 'error');
             });
             
-            // 5. Consultations Listener (NEW)
+            // 5. Consultations Listener
             unsubscribeConsultations = onSnapshot(query(getConsultationsCollectionRef()), (snapshot) => {
                 state.consultations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 // Sort newest first
@@ -300,7 +301,8 @@
             });
             
             // Initial data population for fresh start - ONLY if no patients exist
-            getPatientsCollectionRef().get().then(snapshot => {
+            // FIX: Replaced .get().then(...) with getDocs(ref).then(...)
+            getDocs(getPatientsCollectionRef()).then(snapshot => { 
                 if (snapshot.empty) {
                     const initialPatients = [
                         { name: 'Eleanor A. Vance', reason: 'Annual Checkup', status: 'In Waiting', room: '1A', createdAt: serverTimestamp() },
@@ -430,7 +432,7 @@
             unsubscribeRoles();
             unsubscribeTasks();
             unsubscribePatients(); 
-            unsubscribeConsultations(); // NEW
+            unsubscribeConsultations(); 
             
             // Clear all local session data
             sessionStorage.clear();
@@ -503,7 +505,7 @@
             }
         }
         
-        // NEW Consultation Report Handlers
+        // Consultation Report Handlers
         function showConsultationModal() {
             // Populate the patient dropdown with active patients
             const patientSelect = document.getElementById('report-patient');
@@ -588,7 +590,7 @@
                         <div class="dashboard-card p-6 rounded-xl shadow-lg bg-green-50 border-l-4 border-green-600">
                             <h3 class="text-lg font-semibold text-gray-700">Inventory Items</h3>
                             <p class="text-4xl font-bold text-green-700">${state.inventory.length}</p>
-                        </div>
+                         </div>
                          <div class="dashboard-card p-6 rounded-xl shadow-lg bg-yellow-50 border-l-4 border-yellow-600">
                             <h3 class="text-lg font-semibold text-gray-700">Active Patients</h3>
                             <p class="text-4xl font-bold text-yellow-700">${activePatients.length}</p>
@@ -894,13 +896,13 @@
         window.updateUserRole = updateUserRole; 
         window.addGlobalTask = addGlobalTask;     
         window.deleteGlobalTask = deleteGlobalTask; 
-        window.deleteConsultationReport = deleteConsultationReport; // NEW ADMIN DELETE
+        window.deleteConsultationReport = deleteConsultationReport; 
 
         // Patient Management
         window.showAddPatientModal = showAddPatientModal;
         window.closeAddPatientModal = closeAddPatientModal;
         
-        // Consultation Report Management (NEW)
+        // Consultation Report Management 
         window.showConsultationModal = showConsultationModal;
         window.closeConsultationModal = closeConsultationModal;
         
