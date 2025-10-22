@@ -100,7 +100,7 @@
         </div>
     </div>
     
-    <!-- NEW: Consultation Report Modal (Hidden by default) -->
+    <!-- Consultation Report Modal (Hidden by default) -->
     <div id="consultation-modal" class="fixed inset-0 modal-backdrop z-50 flex items-center justify-center hidden">
         <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-xl transform transition-all scale-100 duration-300">
             <h3 class="text-2xl font-bold text-red-700 mb-6 border-b pb-2">Submit Consultation/Duty Report</h3>
@@ -141,24 +141,19 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        // CRITICAL FIX: Added getDocs to the imports for one-time collection fetch check
-        import { getFirestore, collection, query, onSnapshot, doc, updateDoc, addDoc, serverTimestamp, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, query, onSnapshot, doc, updateDoc, addDoc, serverTimestamp, deleteDoc, getDocs, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- HARDCODED CONFIGURATION (MUST MATCH index.html) ---
-        const YOUR_FIREBASE_CONFIG = {
-            apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
-            authDomain: "clinic-system-1579b.firebaseapp.com",
-            projectId: "clinic-system-1579b",
-            storageBucket: "clinic-system-1579b.firebasestorage.app",
-            messagingSenderId: "211282606869",
-            appId: "1:211282606869:web:853ddeee9ddba036b1c71c",
-            measurementId: "G-B2GSH85BMT"
-        };
+        // IMPORTANT: Enable Firestore debug logs to trace connection issues.
+        setLogLevel('debug');
+
+        // ------------------------------------------------------------------
+        // --- CONFIGURATION: STRICTLY use Canvas environment variables ---
+        // ------------------------------------------------------------------
+        const clinicAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id-fallback';
         
-        // Global variables provided by the Canvas environment
-        const clinicAppId = typeof __app_id !== 'undefined' ? __app_id : 'clinic-default-app';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : YOUR_FIREBASE_CONFIG;
-        
+        // Safely parse __firebase_config, defaulting to an empty object if undefined.
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+
         // --- AUTH & STATE ---
         const authData = {
             role: sessionStorage.getItem('clinic_user_role'),
@@ -231,6 +226,10 @@
 
         function initFirebase() {
             try {
+                if (Object.keys(firebaseConfig).length === 0 || !firebaseConfig.apiKey) {
+                    throw new Error("Firebase configuration is missing or empty.");
+                }
+
                 const app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
@@ -289,19 +288,19 @@
                 window.alertBox("Error fetching patient data.", 'error');
             });
             
-            // 5. Consultations Listener
+            // 5. Consultations Listener (Admin/Nurse Read)
             unsubscribeConsultations = onSnapshot(query(getConsultationsCollectionRef()), (snapshot) => {
                 state.consultations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 // Sort newest first
                 state.consultations.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
                 render();
             }, (error) => {
-                console.error("Error listening to consultations:", error);
-                window.alertBox("Error fetching consultation data.", 'error');
+                // IMPORTANT: If this fails, the Admin cannot read reports.
+                console.error("Error listening to consultations:", error); 
+                window.alertBox(`Error fetching consultation reports. Check Admin authentication or Firestore rules. Details: ${error.code}`, 'error');
             });
             
             // Initial data population for fresh start - ONLY if no patients exist
-            // FIX: Replaced .get().then(...) with getDocs(ref).then(...)
             getDocs(getPatientsCollectionRef()).then(snapshot => { 
                 if (snapshot.empty) {
                     const initialPatients = [
@@ -320,6 +319,7 @@
         // --- FIREBASE ACTIONS ---
 
         async function updateInventory(itemId, field, value) {
+            if (!db) return window.alertBox("Database not ready. Please wait a moment and try again.", 'error');
             if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can update inventory.", 'error');
             const itemRef = doc(db, `artifacts/${clinicAppId}/public/data/inventory`, itemId);
             const updateValue = (field === 'quantity' || field === 'price') ? parseFloat(value) : value;
@@ -334,6 +334,7 @@
         }
         
         async function updateUserRole(userKey, newRole) {
+            if (!db) return window.alertBox("Database not ready. Please wait a moment and try again.", 'error');
             if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can change roles.", 'error');
             if (userKey === authData.key) return window.alertBox("Cannot change your own role while logged in.", 'error');
 
@@ -349,6 +350,7 @@
         }
         
         async function addGlobalTask() {
+            if (!db) return window.alertBox("Database not ready. Please wait a moment and try again.", 'error');
             if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can post tasks.", 'error');
 
             const title = document.getElementById('task-title').value.trim();
@@ -376,6 +378,7 @@
         }
         
         async function deleteGlobalTask(taskId, taskTitle) {
+            if (!db) return window.alertBox("Database not ready. Please wait a moment and try again.", 'error');
             if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can delete tasks.", 'error');
             
             if (!window.confirmDeletion) { window.confirmDeletion = { }; }
@@ -396,6 +399,7 @@
         }
         
         async function deleteConsultationReport(reportId, reportTitle) {
+            if (!db) return window.alertBox("Database not ready. Please wait a moment and try again.", 'error');
             if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can delete reports.", 'error');
             
             if (!window.confirmReportDeletion) { window.confirmReportDeletion = { }; }
@@ -438,7 +442,7 @@
             sessionStorage.clear();
 
             // Sign out from Firebase
-            await signOut(auth);
+            if(auth) await signOut(auth);
             
             // Redirect to login page
             window.location.href = 'index.html';
@@ -457,6 +461,12 @@
 
         async function addNewPatient(event) {
             event.preventDefault();
+            // CRITICAL CHECK: Ensure database connection is established
+            if (!db) {
+                console.error("Database not initialized, cannot register patient.");
+                return window.alertBox("Database not ready. Please wait for initialization (look for 'Connecting...' to disappear) and try again.", 'error');
+            }
+
             const name = document.getElementById('patient-name').value.trim();
             const reason = document.getElementById('patient-reason').value.trim();
             const room = document.getElementById('patient-room').value.trim() || 'Waiting Area';
@@ -480,11 +490,12 @@
                 closeAddPatientModal();
             } catch (e) {
                 console.error("Failed to add new patient:", e);
-                window.alertBox(`Failed to register patient: ${e.message}`, 'error');
+                window.alertBox(`Failed to register patient. Error: ${e.message}. Check console for 'Firestore permission denied'.`, 'error');
             }
         }
         
         async function updatePatientStatus(patientId, newStatus) {
+             if (!db) return window.alertBox("Database not ready. Please wait a moment and try again.", 'error');
              if (authData.role !== 'nurse' && authData.role !== 'admin') return window.alertBox("Permission Denied: Only Nurse/Admin can update patient status.", 'error');
 
             const patientRef = doc(db, `artifacts/${clinicAppId}/public/data/patients`, patientId);
@@ -529,6 +540,12 @@
 
         async function submitConsultationReport(event) {
             event.preventDefault();
+            // CRITICAL CHECK: Ensure database connection is established
+            if (!db) {
+                console.error("Database not initialized, cannot submit report.");
+                return window.alertBox("Database not ready. Please wait for initialization (look for 'Connecting...' to disappear) and try again.", 'error');
+            }
+            
             const title = document.getElementById('report-title').value.trim();
             const patientId = document.getElementById('report-patient').value.trim();
             const content = document.getElementById('report-content').value.trim();
@@ -554,7 +571,7 @@
                 closeConsultationModal();
             } catch (e) {
                 console.error("Failed to submit report:", e);
-                window.alertBox(`Failed to submit report: ${e.message}`, 'error');
+                window.alertBox(`Failed to submit report. Error: ${e.message}. Check console for 'Firestore permission denied'.`, 'error');
             }
         }
 
@@ -910,6 +927,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             const addPatientForm = document.getElementById('add-patient-form');
             if (addPatientForm) {
+                // IMPORTANT: Use addNewPatient without exposing to window scope if you want to avoid global namespace pollution, but here we expose it to be safe for HTML events.
                 addPatientForm.addEventListener('submit', window.addNewPatient);
             }
             
