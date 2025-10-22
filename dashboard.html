@@ -94,11 +94,14 @@
             inventory: [],
             roles: [],
             globalTasks: [], // New state for admin tasks/announcements
-            // Simulated data for Nurses
+            // Simulated data for Nurses - UPDATED WITH 6 FULL NAMES
             nursePatients: [
-                { id: 'P-001', name: 'John Doe', reason: 'Annual Checkup', status: 'In Waiting', room: '1A' },
-                { id: 'P-002', name: 'Jane Smith', reason: 'Fever & Cough', status: 'In Examination', room: '2C' },
-                { id: 'P-003', name: 'Mike Brown', reason: 'Vaccination', status: 'In Waiting', room: '2B' },
+                { id: 'P-001', name: 'Eleanor A. Vance', reason: 'Annual Checkup', status: 'In Waiting', room: '1A' },
+                { id: 'P-002', name: 'Robert J. Chen', reason: 'Fever & Cough', status: 'In Examination', room: '2C' },
+                { id: 'P-003', name: 'Maria D. Rodriguez', reason: 'Vaccination', status: 'In Waiting', room: '2B' },
+                { id: 'P-004', name: 'Samuel P. Hayes', reason: 'Migraine Consultation', status: 'In Waiting', room: '1B' },
+                { id: 'P-005', name: 'Linda M. Kim', reason: 'Routine Bloodwork', status: 'In Examination', room: '3A' },
+                { id: 'P-006', name: 'David O. Wilson', reason: 'Post-Op Follow-up', status: 'Discharged', room: 'N/A' },
             ],
         };
 
@@ -616,9 +619,9 @@
         window.updateInventory = updateInventory;
         window.updatePatientStatus = updatePatientStatus;
         window.alertBox = alertBox;
-        window.updateUserRole = updateUserRole; // New Admin Function
-        window.addGlobalTask = addGlobalTask;     // New Admin Function
-        window.deleteGlobalTask = deleteGlobalTask; // New Admin Function
+        window.updateUserRole = updateUserRole; 
+        window.addGlobalTask = addGlobalTask;     
+        window.deleteGlobalTask = deleteGlobalTask; 
 
         // 1. Initial Auth Check (before Firebase is even initialized)
         checkAuthAndRedirect(); 
