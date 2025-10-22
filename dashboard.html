@@ -15,12 +15,18 @@
             border: 1px solid #e0e7ff; /* Indigo 100 */
             transition: all 0.2s ease-in-out;
         }
+        /* Style for the sticky header in task lists */
+        .sticky-header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
 
     <!-- Header -->
-    <header class="bg-indigo-700 text-white shadow-lg p-4 flex justify-between items-center z-10">
+    <header class="bg-indigo-700 text-white shadow-lg p-4 flex justify-between items-center z-20">
         <div class="flex items-center space-x-3">
             <svg class="w-8 h-8 text-indigo-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 11h16M4 15h16M4 19h16"></path></svg>
             <h1 class="text-xl md:text-2xl font-bold">Clinic Management Dashboard</h1>
@@ -33,7 +39,7 @@
     <!-- Main Content Area -->
     <main class="flex-grow p-4 md:p-8 overflow-y-auto">
         <div id="loading" class="text-center p-12 text-indigo-600 font-semibold">
-            Loading dashboard data...
+            Connecting to Firebase and loading dashboard data...
         </div>
         <div id="content" class="container mx-auto hidden">
             <!-- Role-specific dashboard content will be injected here -->
@@ -51,14 +57,17 @@
             </div>
         </div>
     </div>
+    
+    <!-- Custom Alert Box Container -->
+    <div id="alert-container" class="fixed top-4 right-4 z-50 space-y-2"></div>
 
     <!-- Firebase Imports and Logic -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, query, onSnapshot, doc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, query, onSnapshot, doc, updateDoc, setDoc, deleteDoc, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- HARDCODED CONFIGURATION for GitHub Pages DEPLOYMENT (MUST MATCH index.html) ---
+        // --- HARDCODED CONFIGURATION (MUST MATCH index.html) ---
         const YOUR_FIREBASE_CONFIG = {
             apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
             authDomain: "clinic-system-1579b.firebaseapp.com",
@@ -84,10 +93,12 @@
         const state = {
             inventory: [],
             roles: [],
+            globalTasks: [], // New state for admin tasks/announcements
             // Simulated data for Nurses
             nursePatients: [
                 { id: 'P-001', name: 'John Doe', reason: 'Annual Checkup', status: 'In Waiting', room: '1A' },
                 { id: 'P-002', name: 'Jane Smith', reason: 'Fever & Cough', status: 'In Examination', room: '2C' },
+                { id: 'P-003', name: 'Mike Brown', reason: 'Vaccination', status: 'In Waiting', room: '2B' },
             ],
         };
 
@@ -95,10 +106,12 @@
         let auth = null;
         let unsubscribeInventory = () => {};
         let unsubscribeRoles = () => {};
+        let unsubscribeTasks = () => {}; // New unsubscribe function
 
         // --- FIRESTORE PATHS ---
         const getInventoryCollectionRef = () => collection(db, `artifacts/${clinicAppId}/public/data/inventory`);
         const getRolesCollectionRef = () => collection(db, `artifacts/${clinicAppId}/public/data/roles`);
+        const getTasksCollectionRef = () => collection(db, `artifacts/${clinicAppId}/public/data/globalTasks`);
 
         // --- UTILITIES ---
 
@@ -107,6 +120,34 @@
                 // Not authenticated or session expired. Redirect to login.
                 window.location.href = 'index.html';
             }
+        }
+        
+        // Custom Alert Box implementation (since alert() is forbidden)
+        function alertBox(message, type = 'info') {
+            const container = document.getElementById('alert-container');
+            const box = document.createElement('div');
+            box.textContent = message;
+            box.className = `p-4 rounded-lg shadow-lg text-white font-semibold opacity-0 transition-opacity duration-300`;
+            box.style.opacity = '0';
+            
+            if (type === 'success') {
+                box.classList.add('bg-green-600');
+            } else if (type === 'error') {
+                box.classList.add('bg-red-600');
+            } else {
+                box.classList.add('bg-indigo-600');
+            }
+            
+            container.prepend(box); // Add to the top
+            
+            // Fade in
+            setTimeout(() => { box.style.opacity = '1'; }, 10);
+
+            // Fade out and remove
+            setTimeout(() => {
+                box.style.opacity = '0';
+                setTimeout(() => box.remove(), 300);
+            }, 5000);
         }
 
         // --- FIREBASE INITIALIZATION & LISTENERS ---
@@ -126,49 +167,130 @@
                 render();
             } catch (e) {
                 console.error("Firebase initialization failed:", e);
-                document.getElementById('loading').textContent = `ERROR: Failed to connect to Firebase. ${e.message}`;
+                document.getElementById('loading').textContent = `CRITICAL ERROR: Failed to connect to Firebase. ${e.message}`;
+                window.alertBox(`Critical Error: Firebase failed to initialize. ${e.message}`, 'error');
             }
         }
 
         function startDataListeners() {
             // 1. Inventory Listener (For Admin and Nurse views)
-            unsubscribeInventory = onSnapshot(getInventoryCollectionRef(), (snapshot) => {
+            unsubscribeInventory = onSnapshot(query(getInventoryCollectionRef()), (snapshot) => {
                 state.inventory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                // Sort by name for easier viewing
                 state.inventory.sort((a, b) => a.name.localeCompare(b.name));
                 render();
             }, (error) => {
                 console.error("Error listening to inventory:", error);
+                window.alertBox("Error fetching inventory data.", 'error');
             });
 
-            // 2. Roles Listener (Primarily for Admin view)
-            unsubscribeRoles = onSnapshot(getRolesCollectionRef(), (snapshot) => {
+            // 2. Roles Listener (For Admin view)
+            unsubscribeRoles = onSnapshot(query(getRolesCollectionRef()), (snapshot) => {
                 state.roles = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() }));
                 render();
             }, (error) => {
                 console.error("Error listening to roles:", error);
+                window.alertBox("Error fetching roles data.", 'error');
+            });
+            
+            // 3. Global Tasks Listener (For Admin and Nurse views)
+            unsubscribeTasks = onSnapshot(query(getTasksCollectionRef()), (snapshot) => {
+                state.globalTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                // Sort by timestamp descending
+                state.globalTasks.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
+                render();
+            }, (error) => {
+                console.error("Error listening to global tasks:", error);
+                window.alertBox("Error fetching global tasks.", 'error');
             });
         }
 
         // --- FIREBASE ACTIONS (Admin Only) ---
 
+        // ADMIN: Update Inventory (from previous version)
         async function updateInventory(itemId, field, value) {
-            if (authData.role !== 'admin') return;
+            if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can update inventory.", 'error');
             const itemRef = doc(db, `artifacts/${clinicAppId}/public/data/inventory`, itemId);
-            
-            // Convert to number if updating quantity/price
             const updateValue = (field === 'quantity' || field === 'price') ? parseFloat(value) : value;
             
             try {
                 await updateDoc(itemRef, { [field]: updateValue });
-                console.log(`Updated item ${itemId}: ${field} to ${updateValue}`);
+                window.alertBox(`${field} for ${state.inventory.find(i => i.id === itemId)?.name} updated successfully.`, 'success');
             } catch (e) {
                 console.error("Failed to update inventory:", e);
-                alertBox(`Failed to update inventory: ${e.message}`, 'error');
+                window.alertBox(`Failed to update inventory: ${e.message}`, 'error');
+            }
+        }
+        
+        // ADMIN CORE FEATURE: Update User Role
+        async function updateUserRole(userKey, newRole) {
+            if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can change roles.", 'error');
+            if (userKey === authData.key) return window.alertBox("Cannot change your own role while logged in.", 'error');
+
+            const roleRef = doc(db, `artifacts/${clinicAppId}/public/data/roles`, userKey);
+            
+            try {
+                await updateDoc(roleRef, { role: newRole });
+                window.alertBox(`Role for ${userKey} updated to ${newRole.toUpperCase()}.`, 'success');
+            } catch (e) {
+                console.error("Failed to update user role:", e);
+                window.alertBox(`Failed to update role: ${e.message}`, 'error');
+            }
+        }
+        
+        // ADMIN CORE FEATURE: Add Global Task/Announcement
+        async function addGlobalTask() {
+            if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can post tasks.", 'error');
+
+            const title = document.getElementById('task-title').value.trim();
+            const content = document.getElementById('task-content').value.trim();
+            
+            if (!title || !content) {
+                return window.alertBox("Task Title and Content are required.", 'error');
+            }
+
+            try {
+                await addDoc(getTasksCollectionRef(), {
+                    title: title,
+                    content: content,
+                    postedBy: authData.name,
+                    timestamp: serverTimestamp(),
+                });
+                
+                document.getElementById('task-title').value = '';
+                document.getElementById('task-content').value = '';
+                window.alertBox(`Announcement "${title}" posted successfully.`, 'success');
+            } catch (e) {
+                console.error("Failed to post task:", e);
+                window.alertBox(`Failed to post task: ${e.message}`, 'error');
+            }
+        }
+        
+        // ADMIN CORE FEATURE: Delete Global Task/Announcement
+        async function deleteGlobalTask(taskId, taskTitle) {
+            if (authData.role !== 'admin') return window.alertBox("Permission Denied: Only Admin can delete tasks.", 'error');
+            
+            // Simple visual confirmation for deletion (no confirm() allowed)
+            if (!window.confirmDeletion) {
+                window.confirmDeletion = { };
+            }
+            if (window.confirmDeletion[taskId]) {
+                try {
+                    await deleteDoc(doc(getTasksCollectionRef(), taskId));
+                    window.alertBox(`Announcement "${taskTitle}" deleted.`, 'success');
+                    delete window.confirmDeletion[taskId];
+                } catch (e) {
+                    console.error("Failed to delete task:", e);
+                    window.alertBox(`Failed to delete task: ${e.message}`, 'error');
+                }
+            } else {
+                window.alertBox(`Click DELETE again within 3 seconds to confirm deletion of "${taskTitle}".`, 'info');
+                window.confirmDeletion[taskId] = true;
+                setTimeout(() => { delete window.confirmDeletion[taskId]; }, 3000);
             }
         }
 
-        // --- AUTH ACTIONS ---
+
+        // --- AUTH ACTIONS (unchanged from previous version) ---
 
         function showLogoutModal() {
             document.getElementById('logout-modal').classList.remove('hidden');
@@ -183,12 +305,10 @@
             // Stop listeners
             unsubscribeInventory();
             unsubscribeRoles();
+            unsubscribeTasks();
             
             // Clear all local session data
-            sessionStorage.removeItem('clinic_auth_uid');
-            sessionStorage.removeItem('clinic_user_key');
-            sessionStorage.removeItem('clinic_user_role');
-            sessionStorage.removeItem('clinic_user_name');
+            sessionStorage.clear();
 
             // Sign out from Firebase
             await signOut(auth);
@@ -197,46 +317,23 @@
             window.location.href = 'index.html';
         }
         
-        // --- SIMULATED NURSE ACTIONS ---
+        // --- SIMULATED NURSE ACTIONS (unchanged from previous version) ---
         
         function updatePatientStatus(patientId, newStatus) {
-            // In a real app, this would update a 'patients' collection in Firestore.
-            // For this simulation, we update the local state.
             state.nursePatients = state.nursePatients.map(p => 
                 p.id === patientId ? { ...p, status: newStatus } : p
             );
             render(); // Re-render the nurse dashboard immediately
-            alertBox(`Patient ${patientId} status updated to: ${newStatus}`, 'success');
+            window.alertBox(`Patient ${patientId} status updated to: ${newStatus}`, 'success');
         }
         
-        function alertBox(message, type = 'info') {
-            // Simple alert box implementation (since alert() is forbidden)
-            const box = document.createElement('div');
-            box.textContent = message;
-            box.className = `fixed top-4 right-4 p-4 rounded-lg shadow-lg text-white font-semibold z-50 transition-opacity duration-300`;
-            
-            if (type === 'success') {
-                box.classList.add('bg-green-600');
-            } else if (type === 'error') {
-                box.classList.add('bg-red-600');
-            } else {
-                box.classList.add('bg-indigo-600');
-            }
-            
-            document.body.appendChild(box);
-            
-            setTimeout(() => {
-                box.style.opacity = '0';
-                setTimeout(() => box.remove(), 300);
-            }, 3000);
-        }
 
         // --- RENDERING FUNCTIONS ---
 
         function renderUserInfo() {
             const userInfoDiv = document.getElementById('user-info');
             userInfoDiv.innerHTML = `
-                <span class="px-3 py-1 bg-yellow-400 text-gray-900 font-semibold rounded-full text-xs uppercase shadow">
+                <span class="px-3 py-1 ${authData.role === 'admin' ? 'bg-red-400' : 'bg-yellow-400'} text-gray-900 font-semibold rounded-full text-xs uppercase shadow">
                     ${authData.role}
                 </span>
                 <span class="text-sm font-medium">
@@ -250,83 +347,142 @@
         
         function renderAdminDashboard() {
             return `
-                <div class="space-y-8">
+                <div class="space-y-10">
                     <h2 class="text-3xl font-extrabold text-indigo-700 border-b pb-2">Admin Panel: System Overview</h2>
 
-                    <!-- Role Status Card -->
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <!-- Summary Cards -->
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
                         <div class="dashboard-card p-6 rounded-xl shadow-lg bg-indigo-50 border-l-4 border-indigo-600">
-                            <h3 class="text-lg font-semibold text-gray-700">Total Configured Roles</h3>
+                            <h3 class="text-lg font-semibold text-gray-700">Configured Roles</h3>
                             <p class="text-4xl font-bold text-indigo-700">${state.roles.length}</p>
-                            <p class="text-sm text-gray-500 mt-2">(${state.roles.filter(r => r.role === 'admin').length} Admin, ${state.roles.filter(r => r.role === 'nurse').length} Nurse)</p>
                         </div>
                         <div class="dashboard-card p-6 rounded-xl shadow-lg bg-green-50 border-l-4 border-green-600">
                             <h3 class="text-lg font-semibold text-gray-700">Inventory Items</h3>
                             <p class="text-4xl font-bold text-green-700">${state.inventory.length}</p>
-                            <p class="text-sm text-gray-500 mt-2">Total unique medicine batches available.</p>
                         </div>
-                        <div class="dashboard-card p-6 rounded-xl shadow-lg bg-yellow-50 border-l-4 border-yellow-600">
-                            <h3 class="text-lg font-semibold text-gray-700">Real Firebase UID</h3>
-                            <p class="text-base font-mono truncate text-yellow-700 mt-2">${authData.uid}</p>
-                            <p class="text-sm text-gray-500 mt-2">Session Key: ${authData.key}</p>
+                         <div class="dashboard-card p-6 rounded-xl shadow-lg bg-yellow-50 border-l-4 border-yellow-600">
+                            <h3 class="text-lg font-semibold text-gray-700">Active Tasks</h3>
+                            <p class="text-4xl font-bold text-yellow-700">${state.globalTasks.length}</p>
+                        </div>
+                        <div class="dashboard-card p-6 rounded-xl shadow-lg bg-red-50 border-l-4 border-red-600">
+                            <h3 class="text-lg font-semibold text-gray-700">Firebase UID</h3>
+                            <p class="text-base font-mono truncate text-red-700 mt-2">${authData.uid}</p>
                         </div>
                     </div>
 
-                    <!-- Inventory Management -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <!-- User Role Management (New) -->
+                        <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                            <h3 class="text-2xl font-semibold text-indigo-700 border-b pb-3 mb-4">User Role Management</h3>
+                            <div class="overflow-x-auto h-96">
+                                <table class="min-w-full divide-y divide-gray-200">
+                                    <thead class="sticky-header bg-gray-100">
+                                        <tr>
+                                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User/Key</th>
+                                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="bg-white divide-y divide-gray-200">
+                                        ${state.roles.map(role => `
+                                            <tr class="${role.uid === authData.key ? 'bg-blue-50' : ''}">
+                                                <td class="px-3 py-2 text-sm">
+                                                    <span class="font-semibold text-gray-900">${role.name}</span>
+                                                    <br><span class="text-xs font-mono text-gray-500">${role.uid}</span>
+                                                </td>
+                                                <td class="px-3 py-2 text-sm">
+                                                    <span class="px-2 py-1 text-xs font-bold uppercase rounded-full ${role.role === 'admin' ? 'bg-red-200 text-red-800' : 'bg-blue-200 text-blue-800'}">
+                                                        ${role.role}
+                                                    </span>
+                                                </td>
+                                                <td class="px-3 py-2 whitespace-nowrap">
+                                                    ${role.uid === authData.key ? `
+                                                        <span class="text-xs text-gray-500 italic">Self (Locked)</span>
+                                                    ` : `
+                                                        <select class="p-1 border rounded text-xs bg-white focus:ring-indigo-500 focus:border-indigo-500" 
+                                                            onchange="window.updateUserRole('${role.uid}', this.value)">
+                                                            <option value="nurse" ${role.role === 'nurse' ? 'selected' : ''}>Nurse</option>
+                                                            <option value="admin" ${role.role === 'admin' ? 'selected' : ''}>Admin</option>
+                                                            <option value="patient">Patient (Read-Only)</option>
+                                                        </select>
+                                                    `}
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Global Task/Announcement Management (New) -->
+                        <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                            <h3 class="text-2xl font-semibold text-indigo-700 border-b pb-3 mb-4">Global Announcement Board</h3>
+                            
+                            <!-- Post New Task Form -->
+                            <div class="bg-indigo-50 p-4 rounded-lg mb-4">
+                                <h4 class="font-bold text-indigo-600 mb-2">Post New Announcement</h4>
+                                <input type="text" id="task-title" placeholder="Title (e.g., Staff Meeting Tomorrow)" 
+                                    class="w-full p-2 border border-indigo-300 rounded-lg mb-2 text-sm focus:ring-indigo-500 focus:border-indigo-500">
+                                <textarea id="task-content" placeholder="Details of the announcement or task..." rows="3" 
+                                    class="w-full p-2 border border-indigo-300 rounded-lg mb-3 text-sm focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                                <button onclick="window.addGlobalTask()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-lg shadow-md transition-colors">
+                                    Post Announcement
+                                </button>
+                            </div>
+
+                            <!-- Existing Tasks List -->
+                            <div class="space-y-3 h-64 overflow-y-auto">
+                                ${state.globalTasks.length > 0 ? state.globalTasks.map(task => `
+                                    <div class="p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
+                                        <div class="flex justify-between items-start mb-1">
+                                            <p class="font-bold text-gray-800">${task.title}</p>
+                                            <button onclick="window.deleteGlobalTask('${task.id}', '${task.title}')" class="text-red-500 hover:text-red-700 transition">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                            </button>
+                                        </div>
+                                        <p class="text-sm text-gray-600 mb-2">${task.content}</p>
+                                        <p class="text-xs text-gray-400">Posted by ${task.postedBy} on ${task.timestamp ? new Date(task.timestamp.toMillis()).toLocaleString() : 'N/A'}</p>
+                                    </div>
+                                `).join('') : '<p class="text-center text-gray-500 py-6">No active global announcements.</p>'}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Inventory Management (from previous version) -->
                     <div class="dashboard-card p-6 rounded-xl shadow-xl">
-                        <h3 class="text-2xl font-semibold text-indigo-700 border-b pb-3 mb-4">Inventory Management</h3>
-                        <div class="overflow-x-auto">
+                        <h3 class="text-2xl font-semibold text-indigo-700 border-b pb-3 mb-4">Inventory Management (Read/Write)</h3>
+                        <div class="overflow-x-auto h-96">
                             <table class="min-w-full divide-y divide-gray-200">
-                                <thead class="bg-gray-50">
+                                <thead class="sticky-header bg-gray-100">
                                     <tr>
-                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item ID</th>
                                         <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Medicine Name</th>
                                         <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
                                         <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price (USD)</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
                                     </tr>
                                 </thead>
                                 <tbody class="bg-white divide-y divide-gray-200">
                                     ${state.inventory.map(item => `
                                         <tr>
-                                            <td class="px-3 py-2 whitespace-nowrap text-sm font-mono text-gray-500">${item.id}</td>
                                             <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-gray-900">${item.name}</td>
                                             <td class="px-3 py-2 whitespace-nowrap">
                                                 <input type="number" value="${item.quantity}" min="0" 
-                                                    class="w-20 p-1 border rounded text-sm text-center" 
+                                                    class="w-20 p-1 border rounded text-sm text-center focus:ring-indigo-500 focus:border-indigo-500" 
                                                     onchange="window.updateInventory('${item.id}', 'quantity', this.value)">
                                                 <span class="text-xs text-gray-500 ml-1">${item.unit}</span>
                                             </td>
                                             <td class="px-3 py-2 whitespace-nowrap">
                                                 <input type="number" value="${item.price}" min="0" step="0.01" 
-                                                    class="w-20 p-1 border rounded text-sm text-center" 
+                                                    class="w-20 p-1 border rounded text-sm text-center focus:ring-indigo-500 focus:border-indigo-500" 
                                                     onchange="window.updateInventory('${item.id}', 'price', this.value)">
                                             </td>
+                                            <td class="px-3 py-2 whitespace-nowrap text-sm font-mono text-gray-500">${item.id}</td>
                                         </tr>
                                     `).join('')}
                                 </tbody>
                             </table>
                         </div>
                         <p class="text-sm text-gray-500 mt-4 italic">Note: Changes update the shared inventory in real-time.</p>
-                    </div>
-
-                    <!-- Configured Roles List -->
-                    <div class="dashboard-card p-6 rounded-xl shadow-xl">
-                        <h3 class="text-2xl font-semibold text-indigo-700 border-b pb-3 mb-4">Clinic Role Keys</h3>
-                        <div class="overflow-x-auto">
-                            <ul class="space-y-3">
-                                ${state.roles.map(role => `
-                                    <li class="flex justify-between items-center p-3 rounded-lg ${role.role === 'admin' ? 'bg-red-50' : 'bg-blue-50'} border">
-                                        <div class="flex flex-col">
-                                            <span class="font-semibold text-gray-900">${role.name}</span>
-                                            <span class="text-xs font-mono text-gray-600">${role.uid}</span>
-                                        </div>
-                                        <span class="px-3 py-1 text-xs font-bold uppercase rounded-full ${role.role === 'admin' ? 'bg-red-200 text-red-800' : 'bg-blue-200 text-blue-800'}">
-                                            ${role.role}
-                                        </span>
-                                    </li>
-                                `).join('')}
-                            </ul>
-                        </div>
                     </div>
                 </div>
             `;
@@ -336,15 +492,33 @@
             return `
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     
-                    <!-- Patient Queue (Col 1/2) -->
+                    <!-- Patient Queue & Task Board (Col 1/2) -->
                     <div class="lg:col-span-2 space-y-8">
-                        <h2 class="text-3xl font-extrabold text-blue-700 border-b pb-2">Nurse Workstation: Patient Care</h2>
+                        <h2 class="text-3xl font-extrabold text-blue-700 border-b pb-2">Nurse Workstation: Patient & Task Management</h2>
+
+                        <!-- Task/Announcement Board (New) -->
+                        <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                            <h3 class="text-2xl font-semibold text-yellow-700 border-b pb-3 mb-4 flex items-center">
+                                <svg class="w-6 h-6 mr-2 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1"></path></svg>
+                                Global Announcement Board
+                            </h3>
+                            <div class="space-y-3 h-64 overflow-y-auto">
+                                ${state.globalTasks.length > 0 ? state.globalTasks.map(task => `
+                                    <div class="p-4 bg-yellow-50 border border-yellow-200 rounded-lg shadow-sm">
+                                        <p class="font-bold text-yellow-800">${task.title}</p>
+                                        <p class="text-sm text-gray-700 my-1">${task.content}</p>
+                                        <p class="text-xs text-gray-500">Posted by ${task.postedBy} on ${task.timestamp ? new Date(task.timestamp.toMillis()).toLocaleDateString() : 'N/A'}</p>
+                                    </div>
+                                `).join('') : '<p class="text-center text-gray-500 py-6">No active global announcements from Admin.</p>'}
+                            </div>
+                        </div>
+
 
                         <div class="dashboard-card p-6 rounded-xl shadow-xl">
-                            <h3 class="text-2xl font-semibold text-blue-700 border-b pb-3 mb-4">Current Patient Assignments (${state.nursePatients.length})</h3>
+                            <h3 class="text-2xl font-semibold text-blue-700 border-b pb-3 mb-4">Current Patient Assignments (${state.nursePatients.length} Active)</h3>
                             <div class="space-y-4">
                                 ${state.nursePatients.map(patient => `
-                                    <div class="bg-gray-50 p-4 rounded-lg shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center border-l-4 ${patient.status === 'In Waiting' ? 'border-yellow-500' : 'border-green-500'}">
+                                    <div class="bg-white p-4 rounded-lg shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center border-l-4 ${patient.status === 'In Waiting' ? 'border-yellow-500' : patient.status === 'In Examination' ? 'border-green-500' : 'border-gray-500'}">
                                         <div class="mb-2 md:mb-0">
                                             <p class="font-bold text-lg text-gray-800">${patient.name} <span class="text-sm font-normal text-gray-500 ml-2">(${patient.id})</span></p>
                                             <p class="text-sm text-gray-600">Reason: ${patient.reason}</p>
@@ -353,10 +527,10 @@
                                             <span class="px-3 py-1 text-xs font-semibold rounded-full ${patient.status === 'In Examination' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}">
                                                 ${patient.status} / Room ${patient.room}
                                             </span>
-                                            <select class="p-2 border border-gray-300 rounded-lg text-sm bg-white" onchange="window.updatePatientStatus('${patient.id}', this.value)">
+                                            <select class="p-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-blue-500 focus:border-blue-500" onchange="window.updatePatientStatus('${patient.id}', this.value)">
                                                 <option value="In Waiting" ${patient.status === 'In Waiting' ? 'selected' : ''}>Waiting</option>
                                                 <option value="In Examination" ${patient.status === 'In Examination' ? 'selected' : ''}>Exam</option>
-                                                <option value="Discharged">Discharged</option>
+                                                <option value="Discharged" ${patient.status === 'Discharged' ? 'selected' : ''}>Discharged</option>
                                             </select>
                                         </div>
                                     </div>
@@ -364,48 +538,41 @@
                             </div>
                         </div>
 
-                        <!-- Inventory View (Read-Only) -->
-                        <div class="dashboard-card p-6 rounded-xl shadow-xl">
-                            <h3 class="text-2xl font-semibold text-blue-700 border-b pb-3 mb-4">Medicine Inventory Check</h3>
-                            <div class="h-80 overflow-y-auto">
-                                <table class="min-w-full divide-y divide-gray-200">
-                                    <thead class="sticky top-0 bg-gray-50">
-                                        <tr>
-                                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Medicine Name</th>
-                                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody class="bg-white divide-y divide-gray-200">
-                                        ${state.inventory.map(item => `
-                                            <tr>
-                                                <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-gray-900">${item.name}</td>
-                                                <td class="px-3 py-2 whitespace-nowrap text-sm font-bold ${item.quantity < 20 ? 'text-red-500' : 'text-green-600'}">
-                                                    ${item.quantity} ${item.unit}
-                                                    ${item.quantity < 20 ? '<span class="ml-2 text-xs font-normal text-red-500">(Low Stock)</span>' : ''}
-                                                </td>
-                                            </tr>
-                                        `).join('')}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
                     </div>
                     
-                    <!-- Quick Actions (Col 3) -->
+                    <!-- Quick Actions & Inventory View (Col 3) -->
                     <div class="lg:col-span-1 space-y-6">
-                        <h3 class="text-xl font-extrabold text-blue-700">Quick Actions</h3>
+                        <h3 class="text-xl font-extrabold text-blue-700">Quick Reference</h3>
 
-                        <button onclick="window.alertBox('Simulated: Request sent to Admin for review.', 'info')"
+                        <button onclick="window.alertBox('Simulated: A replenishment request has been sent to the Admin for review.', 'info')"
                             class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-xl shadow-md transition-colors duration-200 flex items-center justify-center space-x-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
                             <span>Request Supplies</span>
                         </button>
                         
-                        <div class="dashboard-card p-4 rounded-xl shadow-lg bg-green-50 border-l-4 border-green-600">
-                            <h4 class="text-md font-bold text-gray-700 mb-2">My Profile</h4>
-                            <p class="text-sm text-gray-600">Name: ${authData.name}</p>
-                            <p class="text-sm text-gray-600">Key: ${authData.key}</p>
+                        <!-- Inventory View (Read-Only) -->
+                        <div class="dashboard-card p-4 rounded-xl shadow-xl">
+                            <h4 class="text-lg font-bold text-gray-700 mb-2 border-b pb-2">Low Stock Inventory Check</h4>
+                            <div class="h-64 overflow-y-auto">
+                                <ul class="space-y-2">
+                                    ${state.inventory.filter(i => i.quantity < 30).map(item => `
+                                        <li class="p-2 border-l-4 border-red-400 bg-red-50 rounded-md">
+                                            <p class="text-sm font-medium text-gray-900">${item.name}</p>
+                                            <p class="text-xs font-bold text-red-600">
+                                                Stock: ${item.quantity} ${item.unit}
+                                            </p>
+                                        </li>
+                                    `).join('')}
+                                    ${state.inventory.filter(i => i.quantity < 30).length === 0 ? '<p class="text-center text-gray-500 py-6 text-sm">All essential items appear well-stocked.</p>' : ''}
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="dashboard-card p-4 rounded-xl shadow-lg bg-blue-50 border-l-4 border-blue-600">
+                            <h4 class="text-md font-bold text-gray-700 mb-2">My Credentials</h4>
+                            <p class="text-sm text-gray-600">User: ${authData.name}</p>
                             <p class="text-sm text-gray-600">Role: ${authData.role.toUpperCase()}</p>
+                            <p class="text-xs font-mono truncate text-gray-500">Key: ${authData.key}</p>
                         </div>
 
                     </div>
@@ -432,7 +599,8 @@
                     contentHTML = renderNurseDashboard();
                     break;
                 default:
-                    contentHTML = `<div class="p-8 text-center bg-red-100 rounded-xl text-red-700">Access Denied: Unknown or unauthorized role (${authData.role}). Please log in again.</div>`;
+                    // This handles the "patient" role or any other undefined role
+                    contentHTML = `<div class="p-8 text-center bg-red-100 rounded-xl text-red-700">Access Denied: You are logged in with role <b>${authData.role.toUpperCase()}</b>. This dashboard only supports Admin and Nurse users. Please log in with an authorized key.</div>`;
                     break;
             }
             
@@ -441,13 +609,16 @@
 
         // --- GLOBAL EXPOSURE AND INITIAL LOAD ---
         
+        // Expose functions for HTML event handlers
         window.showLogoutModal = showLogoutModal;
         window.closeLogoutModal = closeLogoutModal;
         window.performLogout = performLogout;
         window.updateInventory = updateInventory;
         window.updatePatientStatus = updatePatientStatus;
         window.alertBox = alertBox;
-
+        window.updateUserRole = updateUserRole; // New Admin Function
+        window.addGlobalTask = addGlobalTask;     // New Admin Function
+        window.deleteGlobalTask = deleteGlobalTask; // New Admin Function
 
         // 1. Initial Auth Check (before Firebase is even initialized)
         checkAuthAndRedirect(); 
