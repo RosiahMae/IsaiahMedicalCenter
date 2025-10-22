@@ -3,705 +3,477 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Clinic Dashboard</title>
-    <!-- Tailwind CSS CDN -->
+    <title>Role-Based Healthcare Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #f8f9fa; }
-        .tab-button.active {
-            border-bottom: 3px solid #6366f1; /* Indigo-500 */
-            color: #4338ca; /* Indigo-700 */
-        }
-        .content-section { display: none; }
-        .content-section.active { display: block; }
-        /* Custom modal overlay styles */
-        .modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 50;
-        }
-        .modal-content {
-            background: white;
-            padding: 24px;
-            border-radius: 12px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
-            width: 90%;
-            max-width: 400px;
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .dashboard-card {
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            border: 1px solid #bae6fd; /* Light Blue 200 */
         }
     </style>
 </head>
-<body class="min-h-screen flex flex-col">
+<body class="bg-gray-50 min-h-screen">
 
-    <!-- Firebase Configuration and Initial Checks -->
+    <div id="app" class="flex flex-col h-screen">
+        <!-- Header -->
+        <header class="bg-blue-800 text-white shadow-lg p-4 flex justify-between items-center z-10">
+            <h1 class="text-2xl font-bold">HealthTrack Dashboard</h1>
+            <div id="user-info" class="flex items-center space-x-4 text-sm">
+                <!-- User info will be rendered here -->
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="flex-grow p-4 md:p-8 overflow-y-auto">
+            <div id="loading" class="text-center p-8 text-blue-600 font-semibold">
+                Loading dashboard and verifying authentication...
+            </div>
+            <div id="content" class="hidden">
+                <!-- Role-specific content will be injected here -->
+            </div>
+        </main>
+    </div>
+
+    <!-- Firebase Imports and Logic -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        // NOTE: Added 'deleteDoc' and 'updateDoc' for full CRUD
-        import { getFirestore, collection, query, onSnapshot, doc, addDoc, updateDoc, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, addDoc, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- HARDCODED CONFIGURATION (YOUR CONFIG) ---
-        const YOUR_FIREBASE_CONFIG = {
-            apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
-            authDomain: "clinic-system-1579b.firebaseapp.com",
-            projectId: "clinic-system-1579b",
-            storageBucket: "clinic-system-1579b.firebasestorage.app",
-            messagingSenderId: "211282606869",
-            appId: "1:211282606869:web:853ddeee9ddba036b1c71c",
-            measurementId: "G-B2GSH85BMT"
+        // Set Firebase logging level for development (remove in production)
+        setLogLevel('debug');
+
+        // Global state and Firebase references
+        let db;
+        let auth;
+        let appId;
+        let unsubscribeTasks = () => {};
+        let unsubscribeUsers = () => {};
+
+        const state = {
+            isAuthReady: false,
+            userId: null,
+            currentRole: 'Loading',
+            displayName: 'Guest',
+            users: [], // Used by Admin for user management
+            tasks: [], // Global tasks/announcements
         };
-        
-        // Use the hardcoded config for deployment
-        const firebaseConfig = YOUR_FIREBASE_CONFIG; 
-        const appId = 'clinic-default-app'; // Default ID used for Firestore paths
 
-        let db = null;
-        let auth = null;
-        let authenticatedUserId = null; 
+        // Utility: Fallback for crypto.randomUUID()
+        const getUUID = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
 
-        // Session data retrieved from the login page
-        const userRole = sessionStorage.getItem('clinic_user_role');
-        const userName = sessionStorage.getItem('clinic_user_name');
-        const userKey = sessionStorage.getItem('clinic_user_key');
-        const storedAuthUID = sessionStorage.getItem('clinic_auth_uid'); // Real Firebase UID if previously stored
+        // --- CORE FIREBASE/AUTH SETUP (MANDATORY GLOBALS) ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-        // --- Core Session Check ---
-        if (!userRole || !userKey) {
-            window.location.href = 'index.html';
-            return;
-        }
-
-        const userInfoElement = document.getElementById('user-info');
-        const welcomeMessageElement = document.getElementById('welcome-message');
-        const sectionButtons = document.querySelectorAll('.tab-button');
-        const contentSections = document.querySelectorAll('.content-section');
-        const inventoryTableBody = document.getElementById('inventory-table-body');
-
-        // New DOM elements for toggling forms
-        const appointmentsListContainer = document.getElementById('appointments-list-container');
-        const newAppointmentFormContainer = document.getElementById('new-appointment-form-container');
-        const newAppointmentForm = document.getElementById('new-appointment-form');
-
-        const patientsListContainer = document.getElementById('patients-list-container');
-        const newPatientFormContainer = document.getElementById('new-patient-form-container');
-        const newPatientForm = document.getElementById('new-patient-form');
-        
-        // Inventory Update Modal Elements
-        const inventoryEditModal = document.getElementById('inventory-edit-modal');
-        const inventoryEditForm = document.getElementById('inventory-edit-form');
-        const inventoryItemName = document.getElementById('inventory-item-name');
-        const inventoryDocId = document.getElementById('inventory-doc-id');
-
-
-        // --- UI RENDER FUNCTIONS ---
-        function renderUserInfo() {
-            userInfoElement.textContent = `${userName} (${userRole.toUpperCase()})`;
-            welcomeMessageElement.textContent = `Welcome back, ${userName}!`;
-        }
-
-        // Function to toggle between list and form view within a section
-        function toggleView(listContainer, formContainer, showForm = false) {
-            if (showForm) {
-                listContainer.classList.add('hidden');
-                formContainer.classList.remove('hidden');
-            } else {
-                listContainer.classList.remove('hidden');
-                formContainer.classList.add('hidden');
-            }
-        }
-        
-        function switchSection(sectionId) {
-            // Update buttons
-            sectionButtons.forEach(btn => {
-                btn.classList.remove('active');
-                if (btn.dataset.section === sectionId) {
-                    btn.classList.add('active');
-                }
-            });
+        if (!firebaseConfig) {
+            console.error("Firebase config not found. The app will not connect to Firestore.");
+            document.getElementById('loading').textContent = "ERROR: Firebase configuration is missing.";
+        } else {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
             
-            // Update content visibility
-            contentSections.forEach(section => {
-                section.classList.remove('active');
-                if (section.id === sectionId) {
-                    section.classList.add('active');
-                    // Load data for the active section
-                    if (sectionId === 'inventory') {
-                        loadInventory();
-                    } else if (sectionId === 'appointments') {
-                        loadAppointments();
-                        toggleView(appointmentsListContainer, newAppointmentFormContainer, false);
-                    } else if (sectionId === 'patients') {
-                        loadPatients();
-                        toggleView(patientsListContainer, newPatientFormContainer, false);
-                    }
-                }
-            });
+            initAuthListener();
         }
 
-        // --- CRUD Functions (CREATE) ---
+        // --- FIRESTORE PATHS ---
+        const getProfileDocRef = (uid) => doc(db, `artifacts/${appId}/public/data/profiles`, uid);
+        const getTasksCollectionRef = () => collection(db, `artifacts/${appId}/public/data/dashboard_tasks`);
+        const getUsersCollectionRef = () => collection(db, `artifacts/${appId}/public/data/profiles`);
 
-        async function addAppointment(event) {
-            event.preventDefault();
-            const patientName = document.getElementById('appointment-patient-name').value;
-            const date = document.getElementById('appointment-date').value;
-            const time = document.getElementById('appointment-time').value;
-            
-            if (!patientName || !date || !time) return;
 
-            try {
-                await addDoc(collection(db, `artifacts/${appId}/public/data/appointments`), {
-                    patientName,
-                    dateTime: new Date(`${date}T${time}`),
-                    status: 'Scheduled',
-                    bookedBy: userName,
-                    createdAt: serverTimestamp()
-                });
-                newAppointmentForm.reset();
-                toggleView(appointmentsListContainer, newAppointmentFormContainer, false); 
-            } catch (e) {
-                console.error("Error adding appointment:", e);
-                document.getElementById('appointment-status-msg').textContent = 'ERROR: Could not book appointment.';
-            }
-        }
+        // --- AUTHENTICATION AND ROLE MANAGEMENT ---
 
-        async function addPatient(event) {
-            event.preventDefault();
-            const name = document.getElementById('patient-name').value;
-            const dob = document.getElementById('patient-dob').value;
-            const phone = document.getElementById('patient-phone').value;
-            
-            if (!name || !dob || !phone) return;
-
-            try {
-                await addDoc(collection(db, `artifacts/${appId}/public/data/patients`), {
-                    name,
-                    dob,
-                    phone,
-                    recordStatus: 'Active',
-                    registeredBy: userName,
-                    createdAt: serverTimestamp()
-                });
-                newPatientForm.reset();
-                toggleView(patientsListContainer, newPatientFormContainer, false); 
-            } catch (e) {
-                console.error("Error adding patient:", e);
-                document.getElementById('patient-status-msg').textContent = 'ERROR: Could not add patient record.';
-            }
-        }
-        
-        // --- CRUD Functions (UPDATE) ---
-
-        function openInventoryEdit(docId, name, quantity, price) {
-            inventoryItemName.textContent = name;
-            inventoryDocId.value = docId;
-            document.getElementById('inventory-update-quantity').value = quantity;
-            document.getElementById('inventory-update-price').value = price;
-            inventoryEditModal.classList.remove('hidden');
-        }
-
-        async function updateInventory(event) {
-            event.preventDefault();
-            const docId = inventoryDocId.value;
-            const quantity = parseInt(document.getElementById('inventory-update-quantity').value);
-            const price = parseFloat(document.getElementById('inventory-update-price').value);
-
-            if (!docId || isNaN(quantity) || isNaN(price)) return;
-
-            try {
-                const docRef = doc(db, `artifacts/${appId}/public/data/inventory`, docId);
-                await updateDoc(docRef, {
-                    quantity: quantity,
-                    price: price,
-                    lastUpdated: serverTimestamp()
-                });
-                inventoryEditModal.classList.add('hidden');
-                document.getElementById('inventory-edit-status').textContent = 'SUCCESS: Inventory item updated!';
-                setTimeout(() => document.getElementById('inventory-edit-status').textContent = '', 3000);
-            } catch (e) {
-                console.error("Error updating inventory:", e);
-                document.getElementById('inventory-edit-status').textContent = 'ERROR: Could not update inventory.';
-            }
-        }
-
-        // --- CRUD Functions (DELETE) ---
-
-        async function deleteDocument(collectionName, docId) {
-            try {
-                const docRef = doc(db, `artifacts/${appId}/public/data/${collectionName}`, docId);
-                await deleteDoc(docRef);
-                // The UI will automatically update due to onSnapshot
-            } catch (e) {
-                console.error(`Error deleting document from ${collectionName}:`, e);
-                alert('ERROR: Could not delete document. Check console for details.');
-            }
-        }
-
-        // --- DATA LOADERS (READ) ---
-
-        function loadAppointments() {
-            const appointmentsCollectionRef = collection(db, `artifacts/${appId}/public/data/appointments`);
-            const q = query(appointmentsCollectionRef); 
-
-            onSnapshot(q, (snapshot) => {
-                let html = '';
-                if (snapshot.empty) {
-                     html = `<tr><td colspan="5" class="text-center py-4 text-gray-500">No appointments scheduled today.</td></tr>`;
-                } else {
-                    snapshot.forEach((doc) => {
-                        const appointment = doc.data();
-                        const docId = doc.id;
-                        const date = appointment.dateTime.toDate ? appointment.dateTime.toDate().toLocaleString() : 'N/A';
-                        const statusClass = appointment.status === 'Scheduled' ? 'bg-yellow-100 text-yellow-800' : (appointment.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800');
-                        
-                        html += `
-                            <tr class="border-b hover:bg-gray-50">
-                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${appointment.patientName}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${date}</td>
-                                <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">${appointment.status}</span></td>
-                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                    <button data-id="${docId}" data-action="manage-appointment" class="text-indigo-600 hover:text-indigo-900 px-2 py-1 rounded-md hover:bg-indigo-50">Manage (U)</button>
-                                    <button data-id="${docId}" data-action="delete-appointment" class="text-red-600 hover:text-red-900 px-2 py-1 rounded-md hover:bg-red-50 ml-2">Delete (D)</button>
-                                </td>
-                            </tr>
-                        `;
-                    });
-                }
-                document.getElementById('appointments-list').innerHTML = html;
-
-            }, (error) => {
-                console.error("Error loading appointments:", error);
-                document.getElementById('appointments-list').innerHTML = `<tr><td colspan="5" class="text-center py-4 text-red-500">Failed to load appointments.</td></tr>`;
-            });
-        }
-
-        function loadPatients() {
-            const patientsCollectionRef = collection(db, `artifacts/${appId}/public/data/patients`);
-            const q = query(patientsCollectionRef);
-
-            onSnapshot(q, (snapshot) => {
-                let html = '';
-                if (snapshot.empty) {
-                    html = `<tr><td colspan="5" class="text-center py-4 text-gray-500">No patient records found.</td></tr>`;
-                } else {
-                    snapshot.forEach((doc) => {
-                        const patient = doc.data();
-                        const docId = doc.id;
-                        const statusClass = patient.recordStatus === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800';
-                        
-                        html += `
-                            <tr class="border-b hover:bg-gray-50">
-                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${patient.name}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${patient.dob}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${patient.phone}</td>
-                                <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">${patient.recordStatus}</span></td>
-                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                    <button data-id="${docId}" data-action="view-history" class="text-indigo-600 hover:text-indigo-900 px-2 py-1 rounded-md hover:bg-indigo-50">View History (U)</button>
-                                    <button data-id="${docId}" data-action="delete-patient" class="text-red-600 hover:text-red-900 px-2 py-1 rounded-md hover:bg-red-50 ml-2">Delete (D)</button>
-                                </td>
-                            </tr>
-                        `;
-                    });
-                }
-                document.getElementById('patients-list').innerHTML = html;
-            }, (error) => {
-                console.error("Error loading patients:", error);
-                document.getElementById('patients-list').innerHTML = `<tr><td colspan="5" class="text-center py-4 text-red-500">Failed to load patient records.</td></tr>`;
-            });
-        }
-
-        function loadInventory() {
-            const inventoryCollectionRef = collection(db, `artifacts/${appId}/public/data/inventory`);
-            const q = query(inventoryCollectionRef);
-
-            // Real-time listener for Inventory
-            onSnapshot(q, (snapshot) => {
-                let html = '';
-                snapshot.forEach((doc) => {
-                    const item = doc.data();
-                    const docId = doc.id; // Get document ID for update/delete
+        function initAuthListener() {
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    state.userId = user.uid;
+                    state.displayName = user.displayName || `User-${user.uid.substring(0, 4)}`;
                     
-                    // Action column: Edit button visible only to Admin
-                    const adminActions = userRole === 'admin' ? 
-                        `<button 
-                            data-id="${docId}" 
-                            data-action="open-inventory-edit" 
-                            data-name="${item.name}" 
-                            data-quantity="${item.quantity}" 
-                            data-price="${item.price}" 
-                            class="text-indigo-600 hover:text-indigo-900 px-2 py-1 rounded-md hover:bg-indigo-50"
-                        >Edit (U)</button>` : '';
-
-                    html += `
-                        <tr class="border-b hover:bg-gray-50">
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.name}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.unit}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.quantity}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">PESOS ${item.price}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">${adminActions}</td>
-                        </tr>
-                    `;
-                });
-                inventoryTableBody.innerHTML = html;
-            }, (error) => {
-                console.error("Error loading inventory:", error);
-                inventoryTableBody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-red-500">Failed to load inventory: Check Firestore Rules.</td></tr>`;
-            });
-        }
-        
-        // --- Event Delegation for CRUD Actions ---
-        function setupGlobalListeners() {
-            document.addEventListener('click', (event) => {
-                const target = event.target;
-                const action = target.dataset.action;
-                const docId = target.dataset.id;
-
-                if (!action || !docId) return;
-
-                if (action === 'delete-appointment') {
-                    // Custom Alert Confirmation (cannot use native confirm)
-                    if (window.confirm("Confirm deletion of this Appointment?")) {
-                        deleteDocument('appointments', docId);
+                    await ensureUserProfile(user.uid, state.displayName);
+                    
+                } else {
+                    // Sign in with token or anonymously
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined') {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Authentication failed:", error);
+                        state.isAuthReady = true;
+                        state.userId = getUUID(); // Placeholder for UI rendering
+                        state.currentRole = 'Unauthenticated';
+                        render();
                     }
-                } else if (action === 'delete-patient') {
-                    if (window.confirm("Confirm permanent deletion of this Patient Record?")) {
-                        deleteDocument('patients', docId);
-                    }
-                } else if (action === 'open-inventory-edit' && userRole === 'admin') {
-                    // Open the Update Modal for Inventory
-                    const name = target.dataset.name;
-                    const quantity = target.dataset.quantity;
-                    const price = target.dataset.price;
-                    openInventoryEdit(docId, name, quantity, price);
                 }
             });
-
-            // Inventory Update Form Submission
-            inventoryEditForm.addEventListener('submit', updateInventory);
-
-            // Close Inventory Update Modal
-            document.getElementById('cancel-inventory-update').addEventListener('click', () => {
-                inventoryEditModal.classList.add('hidden');
-                document.getElementById('inventory-edit-status').textContent = '';
-            });
         }
 
-        // --- Initialization ---
-
-        function initFirebaseAndDashboard() {
+        // Ensures every signed-in user has a profile document with a role.
+        async function ensureUserProfile(uid, defaultName) {
             try {
-                // Initialize App and Services
-                const app = initializeApp(firebaseConfig);
-                auth = getAuth(app); 
-                db = getFirestore(app);
+                const profileRef = getProfileDocRef(uid);
+                const docSnap = await getDoc(profileRef);
+
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    state.currentRole = data.role;
+                    state.displayName = data.displayName || defaultName;
+                    state.isAuthReady = true;
+                    console.log(`User profile found. Role: ${state.currentRole}`);
+                } else {
+                    // Default new users to Patient role
+                    const newProfile = {
+                        userId: uid,
+                        role: 'Patient', // Default role
+                        displayName: defaultName,
+                        createdAt: serverTimestamp(),
+                    };
+                    await setDoc(profileRef, newProfile);
+                    state.currentRole = 'Patient';
+                    state.isAuthReady = true;
+                    console.log(`New user profile created. Role: ${state.currentRole}`);
+                }
                 
-                // Re-authenticate or confirm existing session
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        renderUserInfo();
-                        setupGlobalListeners(); // Set up global action listeners
-                        
-                        // Set up navigation and initial view
-                        sectionButtons.forEach(btn => {
-                            btn.addEventListener('click', () => {
-                                const sectionId = btn.dataset.section;
-                                switchSection(sectionId);
-                            });
-                        });
-                        
-                        // Set default view to Appointments
-                        switchSection('appointments'); 
+                // Start real-time listeners only after role is confirmed
+                startDataListeners();
+                render();
 
-                        // Attach form listeners and toggles for CRUD
-                        document.getElementById('new-appointment-form').addEventListener('submit', addAppointment);
-                        document.getElementById('new-appointment-btn').addEventListener('click', () => toggleView(appointmentsListContainer, newAppointmentFormContainer, true));
-                        document.getElementById('cancel-appointment-btn').addEventListener('click', () => toggleView(appointmentsListContainer, newAppointmentFormContainer, false));
-                        
-                        document.getElementById('new-patient-form').addEventListener('submit', addPatient);
-                        document.getElementById('new-patient-btn').addEventListener('click', () => toggleView(patientsListContainer, newPatientFormContainer, true));
-                        document.getElementById('cancel-patient-btn').addEventListener('click', () => toggleView(patientsListContainer, newPatientFormContainer, false));
-
-                    } else {
-                        console.log("Session expired, redirecting.");
-                        window.location.href = 'index.html';
-                    }
-                });
-
-            } catch (e) {
-                console.error("Dashboard Firebase initialization failed:", e);
-                window.location.href = 'index.html';
+            } catch (error) {
+                console.error("Error ensuring user profile:", error);
+                state.isAuthReady = true;
+                state.currentRole = 'Error';
+                render();
             }
         }
 
-        // --- Logout Functionality (using only session storage for simplicity) ---
-        document.getElementById('logout-button').addEventListener('click', () => {
-            sessionStorage.clear(); // Clear all session data
-            window.location.href = 'index.html';
-        });
+        // --- REAL-TIME DATA LISTENERS ---
 
-        // Start initialization when the window loads
-        window.onload = initFirebaseAndDashboard;
+        function startDataListeners() {
+            if (!db || !state.isAuthReady) return;
+
+            // Stop previous listeners
+            unsubscribeTasks();
+            unsubscribeUsers();
+
+            // 1. Listen for Tasks/Announcements
+            const tasksQ = query(getTasksCollectionRef());
+            unsubscribeTasks = onSnapshot(tasksQ, (snapshot) => {
+                state.tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                // Sort tasks by timestamp (newest first)
+                state.tasks.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
+                render();
+            }, (error) => {
+                console.error("Error listening to tasks:", error);
+            });
+
+            // 2. Listen for All Users (Required for Admin only, but useful to keep in sync)
+            const usersQ = query(getUsersCollectionRef());
+            unsubscribeUsers = onSnapshot(usersQ, (snapshot) => {
+                state.users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                render();
+            }, (error) => {
+                console.error("Error listening to users:", error);
+            });
+        }
+
+        // --- ADMIN ACTIONS ---
+
+        async function updateRole(targetUserId, newRole) {
+            if (state.currentRole !== 'Admin') return console.warn("Only Admins can update roles.");
+            try {
+                const profileRef = getProfileDocRef(targetUserId);
+                await setDoc(profileRef, { role: newRole }, { merge: true });
+                console.log(`Successfully updated ${targetUserId}'s role to ${newRole}`);
+            } catch (e) {
+                console.error("Error updating role:", e);
+                // Simple error display (replace with modal in a production app)
+                document.getElementById('admin-message').textContent = `Failed to update role: ${e.message}`;
+            }
+        }
+
+        async function postAnnouncement(e) {
+            e.preventDefault();
+            const form = e.target;
+            const content = form.taskContent.value.trim();
+            const targetRole = form.targetRole.value;
+
+            if (!content) return;
+
+            try {
+                await addDoc(getTasksCollectionRef(), {
+                    content: content,
+                    target: targetRole,
+                    postedBy: state.displayName,
+                    postedById: state.userId,
+                    createdAt: serverTimestamp(),
+                });
+                form.reset();
+            } catch (e) {
+                console.error("Error posting announcement:", e);
+            }
+        }
+        
+        async function deleteTask(taskId) {
+            if (state.currentRole !== 'Admin') return console.warn("Only Admins can delete tasks.");
+            try {
+                await deleteDoc(doc(db, `artifacts/${appId}/public/data/dashboard_tasks`, taskId));
+            } catch (e) {
+                console.error("Error deleting task:", e);
+            }
+        }
+
+        // --- NURSE ACTIONS (Simulated) ---
+
+        function updatePatientStatus(patientId, newStatus) {
+            console.log(`Simulated action: Updating patient ${patientId} status to ${newStatus}`);
+            // In a real app, this would update a patient document in Firestore
+        }
+        
+        // --- UI RENDERING ---
+
+        function renderUserInfo() {
+            const userInfoDiv = document.getElementById('user-info');
+            userInfoDiv.innerHTML = `
+                <span class="px-3 py-1 bg-yellow-400 text-gray-900 font-semibold rounded-full text-xs uppercase shadow">
+                    ${state.currentRole}
+                </span>
+                <span class="text-xs md:text-sm font-medium">
+                    ${state.displayName}
+                </span>
+                <span class="text-xs opacity-75 hidden md:inline-block">
+                    (ID: ${state.userId ? state.userId.substring(0, 8) : 'N/A'})
+                </span>
+            `;
+        }
+
+        function renderAdminDashboard() {
+            const adminUsers = state.users.filter(u => u.id !== state.userId);
+            return `
+                <div class="space-y-10">
+                    <h2 class="text-3xl font-extrabold text-blue-900">Admin Control Panel</h2>
+                    <p id="admin-message" class="text-red-500 font-medium"></p>
+
+                    <!-- User Management Panel -->
+                    <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                        <h3 class="text-2xl font-semibold text-blue-800 border-b pb-3 mb-4">User Role Management (${adminUsers.length} Others)</h3>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-blue-200">
+                                <thead class="bg-blue-100">
+                                    <tr>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User ID</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Display Name</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Role</th>
+                                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    ${adminUsers.map(user => `
+                                        <tr>
+                                            <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-900 font-mono">${user.id.substring(0, 8)}...</td>
+                                            <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-700">${user.displayName || 'Unknown'}</td>
+                                            <td class="px-3 py-2 whitespace-nowrap text-sm font-semibold">
+                                                <span class="px-2 inline-flex text-xs leading-5 rounded-full ${user.role === 'Admin' ? 'bg-red-100 text-red-800' : user.role === 'Nurse' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                                                    ${user.role}
+                                                </span>
+                                            </td>
+                                            <td class="px-3 py-2 whitespace-nowrap text-sm font-medium">
+                                                <select id="role-select-${user.id}" class="p-2 border border-gray-300 rounded-lg text-sm bg-white" onchange="window.updateRole('${user.id}', this.value)">
+                                                    <option value="Admin" ${user.role === 'Admin' ? 'selected' : ''}>Admin</option>
+                                                    <option value="Nurse" ${user.role === 'Nurse' ? 'selected' : ''}>Nurse</option>
+                                                    <option value="Patient" ${user.role === 'Patient' ? 'selected' : ''}>Patient</option>
+                                                </select>
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Announcement/Task Posting Panel -->
+                    <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                        <h3 class="text-2xl font-semibold text-blue-800 border-b pb-3 mb-4">Post Global Task/Announcement</h3>
+                        <form id="post-announcement-form" class="space-y-4">
+                            <div>
+                                <label for="target-role" class="block text-sm font-medium text-gray-700">Target Audience</label>
+                                <select name="targetRole" id="target-role" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md">
+                                    <option value="All">All Users (Announcement)</option>
+                                    <option value="Nurse">Nurses Only (Operational Task)</option>
+                                    <option value="Admin">Admins Only (System Note)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="task-content" class="block text-sm font-medium text-gray-700">Content / Message</label>
+                                <textarea name="taskContent" id="task-content" rows="3" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500" placeholder="Type the task or announcement details..."></textarea>
+                            </div>
+                            <button type="submit" class="w-full py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition duration-150">
+                                Post Announcement
+                            </button>
+                        </form>
+                    </div>
+
+                     <!-- Display Global Tasks -->
+                    ${renderTasksList(true)}
+                </div>
+            `;
+        }
+
+        function renderNurseDashboard() {
+            // Simulated data for Patient Assignments
+            const assignedPatients = [
+                { id: 'pat-1001', name: 'Alice M.', room: '301', status: 'Stable' },
+                { id: 'pat-1002', name: 'Bob J.', room: '512', status: 'Requires Attention' },
+                { id: 'pat-1003', name: 'Carol K.', room: '105', status: 'Discharge Pending' }
+            ];
+
+            return `
+                <div class="space-y-10">
+                    <h2 class="text-3xl font-extrabold text-green-700">Nurse Daily Operations</h2>
+                    
+                    <!-- Patient Assignment Card -->
+                    <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                        <h3 class="text-2xl font-semibold text-green-600 border-b pb-3 mb-4">Assigned Patients (${assignedPatients.length})</h3>
+                        <div class="space-y-4">
+                            ${assignedPatients.map(patient => `
+                                <div class="bg-white p-4 rounded-lg shadow flex justify-between items-center transition hover:shadow-md">
+                                    <div>
+                                        <p class="font-bold text-lg text-gray-800">${patient.name} - Room ${patient.room}</p>
+                                        <p class="text-sm ${patient.status === 'Requires Attention' ? 'text-red-500 font-semibold' : 'text-gray-500'}">Status: ${patient.status}</p>
+                                    </div>
+                                    <select class="p-2 border border-gray-300 rounded-lg text-sm bg-gray-50" onchange="window.updatePatientStatus('${patient.id}', this.value)">
+                                        <option value="Stable" ${patient.status === 'Stable' ? 'selected' : ''}>Stable</option>
+                                        <option value="Requires Attention" ${patient.status === 'Requires Attention' ? 'selected' : ''}>Requires Attention</option>
+                                        <option value="Discharge Pending" ${patient.status === 'Discharge Pending' ? 'selected' : ''}>Discharge Pending</option>
+                                    </select>
+                                </div>
+                            `).join('')}
+                        </div>
+                        <p class="text-sm text-gray-500 mt-4 italic">Note: Patient status updates are simulated for this demo.</p>
+                    </div>
+                    
+                    <!-- Task Board -->
+                    ${renderTasksList(false, ['All', 'Nurse'])}
+                </div>
+            `;
+        }
+
+        function renderPatientDashboard() {
+            return `
+                <div class="space-y-8">
+                    <h2 class="text-3xl font-extrabold text-blue-600">Patient Information Portal</h2>
+                    
+                    <!-- Welcome Card -->
+                    <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                        <p class="text-lg text-gray-700">Welcome, <span class="font-semibold">${state.displayName}</span>!</p>
+                        <p class="text-sm text-gray-500 mt-2">This is your personal information dashboard. You can view general hospital announcements and check your profile status here. Your assigned ID is <span class="font-mono bg-gray-100 px-1 rounded">${state.userId.substring(0, 8)}...</span></p>
+                    </div>
+
+                    <!-- Announcements -->
+                    ${renderTasksList(false, ['All'])}
+                </div>
+            `;
+        }
+
+        function renderTasksList(showAdminControls = false, filterRoles = ['All', 'Nurse', 'Admin']) {
+            const filteredTasks = state.tasks.filter(t => filterRoles.includes(t.target));
+
+            if (filteredTasks.length === 0) {
+                 return `
+                    <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                        <h3 class="text-2xl font-semibold text-blue-800 border-b pb-3 mb-4">Announcements & Tasks</h3>
+                        <p class="text-gray-500">No active announcements or tasks for your role at this time.</p>
+                    </div>
+                 `;
+            }
+
+            return `
+                <div class="dashboard-card p-6 rounded-xl shadow-xl">
+                    <h3 class="text-2xl font-semibold text-blue-800 border-b pb-3 mb-4">Announcements & Tasks</h3>
+                    <div class="space-y-4">
+                        ${filteredTasks.map(task => `
+                            <div class="p-4 rounded-lg ${task.target === 'Nurse' ? 'bg-yellow-50 border-l-4 border-yellow-500' : task.target === 'Admin' ? 'bg-red-50 border-l-4 border-red-500' : 'bg-white border-l-4 border-blue-500'} shadow-sm">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <p class="font-medium text-gray-800">${task.content}</p>
+                                        <p class="text-xs text-gray-500 mt-1">
+                                            Posted by <span class="font-semibold">${task.postedBy}</span>
+                                            ${task.createdAt ? ` on ${new Date(task.createdAt.toMillis()).toLocaleString()}` : ''}
+                                            <span class="ml-2 px-2 py-0.5 text-xs rounded-full font-bold ${task.target === 'All' ? 'bg-blue-200 text-blue-800' : task.target === 'Nurse' ? 'bg-yellow-200 text-yellow-800' : 'bg-red-200 text-red-800'}">${task.target}</span>
+                                        </p>
+                                    </div>
+                                    ${showAdminControls ? `
+                                        <button class="text-red-500 hover:text-red-700 p-1 rounded-full transition" onclick="window.deleteTask('${task.id}')">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                                            </svg>
+                                        </button>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Main render function
+        function render() {
+            const contentDiv = document.getElementById('content');
+            const loadingDiv = document.getElementById('loading');
+            
+            if (!state.isAuthReady) {
+                loadingDiv.classList.remove('hidden');
+                contentDiv.classList.add('hidden');
+                return;
+            }
+
+            loadingDiv.classList.add('hidden');
+            contentDiv.classList.remove('hidden');
+            
+            renderUserInfo();
+
+            let contentHTML = '';
+            switch (state.currentRole) {
+                case 'Admin':
+                    contentHTML = renderAdminDashboard();
+                    break;
+                case 'Nurse':
+                    contentHTML = renderNurseDashboard();
+                    break;
+                case 'Patient':
+                    contentHTML = renderPatientDashboard();
+                    break;
+                default:
+                    contentHTML = `<div class="p-8 text-center text-red-500">Access Denied or Unknown Role: ${state.currentRole}</div>`;
+                    break;
+            }
+            contentDiv.innerHTML = contentHTML;
+            
+            // Re-attach event listeners after innerHTML update
+            if (state.currentRole === 'Admin') {
+                const form = document.getElementById('post-announcement-form');
+                if (form) {
+                    form.addEventListener('submit', postAnnouncement);
+                }
+            }
+        }
+        
+        // Expose functions to the global scope for inline event handlers (like onclick)
+        window.updateRole = updateRole;
+        window.postAnnouncement = postAnnouncement;
+        window.deleteTask = deleteTask;
+        window.updatePatientStatus = updatePatientStatus; // Exposed simulated function
+        
+        // Initial render (will be updated by the auth listener)
+        render();
 
     </script>
-
-    <!-- UI STRUCTURE -->
-    <header class="bg-indigo-700 text-white shadow-lg p-4 flex justify-between items-center sticky top-0 z-10">
-        <h1 class="text-2xl font-bold">Clinic Dashboard</h1>
-        <div class="flex items-center space-x-4">
-            <span id="user-info" class="text-sm font-medium">Loading User...</span>
-            <button id="logout-button" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-full text-sm font-semibold transition duration-150 shadow-md">
-                Logout
-            </button>
-        </div>
-    </header>
-
-    <div class="bg-white shadow-md">
-        <div class="container mx-auto px-6 pt-4 pb-2">
-            <h2 class="text-3xl font-extrabold text-gray-800 mb-4" id="welcome-message"></h2>
-            
-            <!-- Navigation Tabs -->
-            <nav class="flex space-x-8 border-b border-gray-200">
-                <button data-section="appointments" class="tab-button text-gray-600 hover:text-indigo-700 py-2 font-medium transition duration-150 active">Appointments</button>
-                <button data-section="consultation" class="tab-button text-gray-600 hover:text-indigo-700 py-2 font-medium transition duration-150">Consultation</button>
-                <button data-section="inventory" class="tab-button text-gray-600 hover:text-indigo-700 py-2 font-medium transition duration-150">Inventory</button>
-                <button data-section="patients" class="tab-button text-gray-600 hover:text-indigo-700 py-2 font-medium transition duration-150">Patients</button>
-                <button data-section="reports" class="tab-button text-gray-600 hover:text-indigo-700 py-2 font-medium transition duration-150"
-                        id="reports-tab" disabled title="Admin access required for Reports">Reports</button>
-            </nav>
-        </div>
-    </div>
-
-    <main class="flex-grow container mx-auto p-6">
-        
-        <!-- ============================================== -->
-        <!-- SECTION: APPOINTMENTS (C/R/U/D) -->
-        <!-- ============================================== -->
-        <section id="appointments" class="content-section active">
-            <h3 class="text-2xl font-bold text-indigo-700 mb-4">Appointments Schedule</h3>
-
-            <!-- Appointment List View (Read/Delete) -->
-            <div id="appointments-list-container" class="bg-white p-6 rounded-xl shadow-lg">
-                <div class="flex justify-between items-center mb-4">
-                    <p class="text-gray-600 font-medium">Today's Scheduled Appointments (Delete implemented)</p>
-                    <button id="new-appointment-btn" class="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200">
-                        + New Appointment (Create)
-                    </button>
-                </div>
-                <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Patient</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date & Time</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions (U/D)</th>
-                            </tr>
-                        </thead>
-                        <tbody id="appointments-list" class="bg-white divide-y divide-gray-200">
-                            <tr><td colspan="4" class="text-center py-4 text-indigo-500 animate-pulse">Loading appointments...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- New Appointment Form (Create) -->
-            <div id="new-appointment-form-container" class="hidden bg-white p-6 rounded-xl shadow-lg">
-                <h4 class="text-xl font-semibold text-indigo-700 mb-4">Book New Appointment</h4>
-                <form id="new-appointment-form">
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label for="appointment-patient-name" class="block text-sm font-medium text-gray-700">Patient Name</label>
-                            <input type="text" id="appointment-patient-name" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
-                        </div>
-                        <div>
-                            <label for="appointment-date" class="block text-sm font-medium text-gray-700">Date</label>
-                            <input type="date" id="appointment-date" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
-                        </div>
-                        <div>
-                            <label for="appointment-time" class="block text-sm font-medium text-gray-700">Time</label>
-                            <input type="time" id="appointment-time" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
-                        </div>
-                    </div>
-                    <p id="appointment-status-msg" class="text-sm text-red-500 mt-2"></p>
-                    <div class="mt-6 flex space-x-3 justify-end">
-                        <button type="button" id="cancel-appointment-btn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg font-semibold transition-colors duration-200">
-                            Cancel
-                        </button>
-                        <button type="submit" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200">
-                            Schedule Appointment
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </section>
-
-        <!-- ============================================== -->
-        <!-- SECTION: CONSULTATION (Update Core Logic) -->
-        <!-- ============================================== -->
-        <section id="consultation" class="content-section">
-            <h3 class="text-2xl font-bold text-indigo-700 mb-4">Patient Consultation</h3>
-            <div class="bg-white p-6 rounded-xl shadow-lg">
-                <p class="text-gray-500">Feature: Start a new consultation, record vitals, issue prescriptions, and save the consultation record.</p>
-                <div class="mt-4 p-4 bg-blue-100 border-l-4 border-blue-500 text-blue-700 rounded-md">
-                    This section represents the **Update** logic, where a new medical entry is written to an existing patient's record.
-                </div>
-            </div>
-        </section>
-
-        <!-- ============================================== -->
-        <!-- SECTION: INVENTORY (R/U Implemented) -->
-        <!-- ============================================== -->
-        <section id="inventory" class="content-section">
-            <h3 class="text-2xl font-bold text-indigo-700 mb-4">Inventory & Stock</h3>
-            <div class="bg-white rounded-xl shadow-lg overflow-hidden">
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Medicine Name</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price (PESOS)</th>
-                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Action (U)</th>
-                        </tr>
-                    </thead>
-                    <tbody id="inventory-table-body" class="bg-white divide-y divide-gray-200">
-                        <!-- Inventory data will be loaded here by JavaScript -->
-                        <tr>
-                            <td colspan="5" class="text-center py-8 text-indigo-500 animate-pulse">Loading medicine items...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-        <!-- ============================================== -->
-        <!-- SECTION: PATIENTS (C/R/D) -->
-        <!-- ============================================== -->
-        <section id="patients" class="content-section">
-            <h3 class="text-2xl font-bold text-indigo-700 mb-4">Patient Records</h3>
-
-            <!-- Patient List View (Read/Delete) -->
-            <div id="patients-list-container" class="bg-white p-6 rounded-xl shadow-lg">
-                <div class="flex justify-between items-center mb-4">
-                    <p class="text-gray-600 font-medium">Clinic Patient List (Delete implemented)</p>
-                    <button id="new-patient-btn" class="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200">
-                        + New Patient (Create)
-                    </button>
-                </div>
-                <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">DOB</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Phone</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions (U/D)</th>
-                            </tr>
-                        </thead>
-                        <tbody id="patients-list" class="bg-white divide-y divide-gray-200">
-                            <tr><td colspan="5" class="text-center py-4 text-indigo-500 animate-pulse">Loading patient records...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- New Patient Form (Create) -->
-            <div id="new-patient-form-container" class="hidden bg-white p-6 rounded-xl shadow-lg">
-                <h4 class="text-xl font-semibold text-indigo-700 mb-4">Register New Patient</h4>
-                <form id="new-patient-form">
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div>
-                            <label for="patient-name" class="block text-sm font-medium text-gray-700">Full Name</label>
-                            <input type="text" id="patient-name" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
-                        </div>
-                        <div>
-                            <label for="patient-dob" class="block text-sm font-medium text-gray-700">Date of Birth</label>
-                            <input type="date" id="patient-dob" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
-                        </div>
-                        <div>
-                            <label for="patient-phone" class="block text-sm font-medium text-gray-700">Phone Number</label>
-                            <input type="tel" id="patient-phone" required class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
-                        </div>
-                    </div>
-                    <p id="patient-status-msg" class="text-sm text-red-500 mt-2"></p>
-                    <div class="mt-6 flex space-x-3 justify-end">
-                        <button type="button" id="cancel-patient-btn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg font-semibold transition-colors duration-200">
-                            Cancel
-                        </button>
-                        <button type="submit" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200">
-                            Register Patient
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </section>
-
-        <!-- ============================================== -->
-        <!-- SECTION: REPORTS (Admin Only) -->
-        <!-- ============================================== -->
-        <section id="reports" class="content-section">
-            <h3 class="text-2xl font-bold text-red-700 mb-4">System Reports (Admin Only)</h3>
-            <div class="bg-white p-6 rounded-xl shadow-lg">
-                <p class="text-gray-500">Feature: Generate sales reports, staff usage logs, and inventory turnover reports.</p>
-                <div class="mt-4 p-4 bg-red-100 border-l-4 border-red-500 text-red-700 rounded-md">
-                    This section is Read-only (R) for aggregate data and requires Admin access.
-                </div>
-            </div>
-        </section>
-
-        <script>
-            // Enable the Reports tab only for the Admin
-            const userRoleCheck = sessionStorage.getItem('clinic_user_role');
-            if (userRoleCheck === 'admin') {
-                document.getElementById('reports-tab').disabled = false;
-                document.getElementById('reports-tab').title = '';
-            } else {
-                const reportsElement = document.getElementById('reports');
-                if (reportsElement) reportsElement.remove();
-                
-                const reportsTab = document.getElementById('reports-tab');
-                if (reportsTab) reportsTab.remove();
-            }
-        </script>
-    </main>
-
-    <!-- ============================================== -->
-    <!-- INVENTORY UPDATE MODAL (Custom UI for Update) -->
-    <!-- ============================================== -->
-    <div id="inventory-edit-modal" class="modal-overlay hidden">
-        <div class="modal-content">
-            <h4 class="text-xl font-semibold text-indigo-700 mb-4">Update Stock: <span id="inventory-item-name" class="font-bold"></span></h4>
-            <form id="inventory-edit-form">
-                <input type="hidden" id="inventory-doc-id">
-                
-                <div class="mb-4">
-                    <label for="inventory-update-quantity" class="block text-sm font-medium text-gray-700">New Quantity in Stock</label>
-                    <input type="number" id="inventory-update-quantity" required min="0" class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
-                </div>
-
-                <div class="mb-4">
-                    <label for="inventory-update-price" class="block text-sm font-medium text-gray-700">New Price (PESOS)</label>
-                    <input type="number" step="0.01" id="inventory-update-price" required min="0" class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-indigo-500 focus:border-indigo-500">
-                </div>
-                
-                <p id="inventory-edit-status" class="text-sm text-center font-medium text-green-600 mb-4"></p>
-
-                <div class="mt-6 flex space-x-3 justify-end">
-                    <button type="button" id="cancel-inventory-update" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg font-semibold transition-colors duration-200">
-                        Cancel
-                    </button>
-                    <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-colors duration-200">
-                        Save Changes
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
 </body>
 </html>
