@@ -114,9 +114,11 @@
             const rolesCollectionRef = collection(db, `artifacts/${appId}/public/data/roles`);
             const inventoryCollectionRef = collection(db, `artifacts/${appId}/public/data/inventory`);
             
-            // 1. Check if roles exist
-            const rolesSnapshot = await getDocs(rolesCollectionRef);
-            if (rolesSnapshot.empty) {
+            // 1. Check specifically if the ADMIN_KEY role document exists.
+            const adminDocRef = doc(rolesCollectionRef, ADMIN_KEY);
+            const adminDoc = await getDoc(adminDocRef);
+
+            if (!adminDoc.exists()) { // Only seed if the Admin key is missing
                 statusMessage.textContent = "Seeding initial roles and inventory (One-time setup)...";
 
                 try {
