@@ -25,659 +25,781 @@
         .modal-backdrop {
             background-color: rgba(0, 0, 0, 0.5);
         }
+        /* Custom scrollbar for better look */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #a5b4fc; /* Indigo 300 */
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
 
+    <!-- Alert Box (Replaces alert() and confirm()) -->
+    <div id="alert-box" class="fixed top-0 inset-x-0 flex justify-center p-4 z-50 pointer-events-none transition-opacity duration-300 opacity-0">
+        <div class="bg-red-500 text-white p-4 rounded-lg shadow-xl max-w-sm pointer-events-auto">
+            <p id="alert-message" class="font-semibold"></p>
+        </div>
+    </div>
+    
+    <!-- Modal for Adding/Editing Patient -->
+    <div id="add-patient-modal" class="fixed inset-0 z-40 modal-backdrop hidden items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 transform transition-all scale-95" onclick="event.stopPropagation();">
+            <h2 class="text-2xl font-bold text-indigo-700 mb-4">Add New Patient</h2>
+            <form id="add-patient-form">
+                <div class="mb-4">
+                    <label for="patient-name" class="block text-sm font-medium text-gray-700">Full Name</label>
+                    <input type="text" id="patient-name" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border" required>
+                </div>
+                <div class="mb-4">
+                    <label for="patient-age" class="block text-sm font-medium text-gray-700">Age</label>
+                    <input type="number" id="patient-age" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border" required>
+                </div>
+                <div class="mb-4">
+                    <label for="patient-complaint" class="block text-sm font-medium text-gray-700">Chief Complaint</label>
+                    <textarea id="patient-complaint" rows="2" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border" required></textarea>
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                    <button type="button" onclick="closeAddPatientModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition duration-150">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition duration-150">Save Patient</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal for Consultation Report -->
+    <div id="consultation-modal" class="fixed inset-0 z-40 modal-backdrop hidden items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl p-6 transform transition-all scale-95" onclick="event.stopPropagation();">
+            <h2 class="text-2xl font-bold text-indigo-700 mb-4">New Consultation Report</h2>
+            <form id="consultation-form">
+                <input type="hidden" id="consultation-patient-id">
+                <div class="mb-4">
+                    <label for="consultation-patient-name" class="block text-sm font-medium text-gray-700">Patient Name</label>
+                    <input type="text" id="consultation-patient-name" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm p-2 border bg-gray-50" readonly required>
+                </div>
+                <div class="mb-4">
+                    <label for="consultation-diagnosis" class="block text-sm font-medium text-gray-700">Diagnosis</label>
+                    <input type="text" id="consultation-diagnosis" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border" required>
+                </div>
+                <div class="mb-4">
+                    <label for="consultation-notes" class="block text-sm font-medium text-gray-700">Consultation Notes/Treatment</label>
+                    <textarea id="consultation-notes" rows="4" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border" required></textarea>
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                    <button type="button" onclick="closeConsultationModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition duration-150">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition duration-150">Submit Report</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
     <!-- Header -->
     <header class="bg-indigo-700 text-white shadow-lg p-4 flex justify-between items-center z-20">
         <div class="flex items-center space-x-3">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10h16V7M5 7L12 3l7 4M7 7h10"></path></svg>
-            <span class="text-xl font-semibold">Clinic Dashboard</span>
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10m0 0h16a1 1 0 001-1V8a1 1 0 00-1-1H4zm12 6a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+            <h1 class="text-xl font-semibold">Clinic Dashboard</h1>
+            <span id="user-role-display" class="text-sm px-2 py-0.5 rounded-full bg-indigo-500 font-medium">Loading Role...</span>
         </div>
         <div class="flex items-center space-x-4">
-            <span id="user-role-display" class="bg-indigo-600 text-xs font-medium px-3 py-1 rounded-full">Loading Role...</span>
-            <span id="user-id-display" class="text-sm">User ID: N/A</span>
-            <button id="logout-button" class="bg-red-500 hover:bg-red-600 transition duration-150 text-white font-medium py-2 px-4 rounded-lg shadow-md focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50">Logout</button>
+            <!-- Now shows the user's clinic key instead of the anonymous UID -->
+            <p id="user-key-display" class="text-sm font-mono bg-indigo-600 px-3 py-1 rounded-full shadow-md truncate" style="max-width: 150px;">Key: Loading...</p>
+            <button id="sign-out-btn" class="bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-1 px-3 rounded-lg transition duration-150 shadow-md">Sign Out</button>
         </div>
     </header>
 
-    <!-- Main Content -->
+    <!-- Main Content Area -->
     <main class="flex-grow p-4 md:p-8">
-        <div id="loading-overlay" class="fixed inset-0 bg-white/70 z-30 flex items-center justify-center hidden">
-            <div class="flex flex-col items-center">
-                <svg class="animate-spin h-10 w-10 text-indigo-700 mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <p class="text-indigo-700 font-medium">Loading Dashboard Data...</p>
-            </div>
+
+        <!-- Status & Error Messages -->
+        <div id="loading-status" class="mb-6 text-center text-indigo-600 font-medium">Initializing system...</div>
+        <div id="error-alert" class="hidden bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg mb-6" role="alert">
+            <p id="error-text" class="font-medium"></p>
         </div>
-
-        <div id="main-dashboard-content" class="hidden">
-            <!-- Grid Layout for Dashboard Cards -->
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-                <!-- Patient Management Card -->
-                <div class="dashboard-card p-6 rounded-xl shadow-lg border-l-4 border-indigo-500">
-                    <h2 class="text-xl font-bold text-gray-700 mb-4 flex items-center">
-                        <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H9a4 4 0 01-4-4v-2.586a1 1 0 01.293-.707l.793-.793a4 4 0 001.07-2.348v-2.12c0-1.168.93-2.115 2.083-2.115h2.167c1.153 0 2.083.947 2.083 2.115v2.12c0 .8.293 1.55.793 2.12l.793.793a1 1 0 01.293.707V17a4 4 0 01-4 4z"></path></svg>
-                        Patient Management
-                    </h2>
-                    <p class="text-gray-500 mb-4">View and manage patient records.</p>
-                    <button onclick="showAddPatientModal()" class="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-medium py-2 rounded-lg transition duration-150 shadow-md">Add New Patient</button>
-                    <div id="patient-list" class="mt-4 max-h-96 overflow-y-auto space-y-2">
-                        <!-- Patient cards will be rendered here -->
-                        <p class="text-center text-gray-400 p-4">Loading patients...</p>
-                    </div>
-                </div>
-
-                <!-- Global Tasks Card -->
-                <div class="dashboard-card p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
-                    <h2 class="text-xl font-bold text-gray-700 mb-4 flex items-center">
-                        <svg class="w-5 h-5 mr-2 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
-                        Global Tasks
-                    </h2>
-                    <div class="flex space-x-2 mb-4">
-                        <input type="text" id="new-task-input" placeholder="Enter new task" class="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
-                        <button onclick="addGlobalTask()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-medium py-2 px-4 rounded-lg transition duration-150 shadow-md">Add</button>
-                    </div>
-                    <div id="task-list" class="max-h-96 overflow-y-auto space-y-2">
-                        <!-- Tasks will be rendered here -->
-                        <p class="text-center text-gray-400 p-4">No pending tasks.</p>
-                    </div>
-                </div>
-
-                <!-- Inventory Card -->
-                <div class="dashboard-card p-6 rounded-xl shadow-lg border-l-4 border-orange-500">
-                    <h2 class="text-xl font-bold text-gray-700 mb-4 flex items-center">
-                        <svg class="w-5 h-5 mr-2 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m4 4v10m0-2.348l1.795-1.8m4.9-3.953L16 14.5"></path></svg>
-                        Inventory Status
-                    </h2>
-                    <div id="inventory-list" class="max-h-96 overflow-y-auto space-y-3">
-                        <!-- Inventory items will be rendered here -->
-                        <p class="text-center text-gray-400 p-4">Loading inventory...</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Consultation Reports & User Management Section -->
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <!-- Consultation Reports Card (Spans 2 columns) -->
-                <div class="dashboard-card lg:col-span-2 p-6 rounded-xl shadow-lg border-l-4 border-sky-500">
-                    <h2 class="text-xl font-bold text-gray-700 mb-4 flex items-center">
-                        <svg class="w-5 h-5 mr-2 text-sky-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                        Recent Consultation Reports
-                    </h2>
-                    <div id="reports-list" class="max-h-[500px] overflow-y-auto space-y-3">
-                        <!-- Reports will be rendered here -->
-                        <p class="text-center text-gray-400 p-4">Loading reports...</p>
-                    </div>
-                </div>
-
-                <!-- User Management Card (Admin Only) -->
-                <div id="user-management-card" class="dashboard-card p-6 rounded-xl shadow-lg border-l-4 border-pink-500 hidden">
-                    <h2 class="text-xl font-bold text-gray-700 mb-4 flex items-center">
-                        <svg class="w-5 h-5 mr-2 text-pink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20h-5m5 0v-2a3 3 0 00-5.356-1.857M12 20v-2m-9 1l4-4m-2 2l2 2m10-4l4 4m-2-2l2-2"></path></svg>
-                        User Roles (Admin)
-                    </h2>
-                    <div id="user-role-list" class="max-h-[500px] overflow-y-auto space-y-3">
-                        <!-- User roles will be rendered here -->
-                        <p class="text-center text-gray-400 p-4">Loading user roles...</p>
-                    </div>
-                </div>
-
-            </div>
-        </div>
-
-    </main>
-
-    <!-- ALERT BOX MODAL (Custom Alert/Confirm) -->
-    <div id="alert-box-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-[100]">
-        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm m-4 transform transition-all duration-300">
-            <h3 id="alert-title" class="text-lg font-bold text-gray-800 mb-2">Alert</h3>
-            <p id="alert-message" class="text-gray-600 mb-4">Message content.</p>
-            <div id="alert-actions" class="flex justify-end space-x-3">
-                <!-- Buttons will be dynamically added here -->
-            </div>
-        </div>
-    </div>
-    
-    <!-- MODAL 1: ADD PATIENT -->
-    <div id="add-patient-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50">
-        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-lg m-4 transform transition-all duration-300">
-            <h3 class="text-2xl font-bold text-indigo-700 mb-4 border-b pb-2">Add New Patient</h3>
-            <form id="add-patient-form">
-                <div class="space-y-4">
-                    <input type="text" id="patient-name" placeholder="Patient Name" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
-                    <input type="date" id="patient-dob" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
-                    <select id="patient-status" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
-                        <option value="">Select Status</option>
-                        <option value="Waiting">Waiting</option>
-                        <option value="Consulting">Consulting</option>
-                        <option value="Treated">Treated</option>
-                    </select>
-                </div>
-                <div class="flex justify-end space-x-3 mt-6">
-                    <button type="button" onclick="closeAddPatientModal()" class="px-4 py-2 text-gray-600 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-150">Cancel</button>
-                    <button type="submit" class="px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition duration-150 shadow-md">Add Patient</button>
-                </div>
-            </form>
-        </div>
-    </div>
-    
-    <!-- MODAL 2: ADD CONSULTATION REPORT -->
-    <div id="consultation-modal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50">
-        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-2xl m-4 transform transition-all duration-300">
-            <h3 class="text-2xl font-bold text-sky-700 mb-4 border-b pb-2">Submit Consultation Report</h3>
-            <form id="consultation-form">
-                <div class="space-y-4">
-                    <input type="text" id="report-patient-name" placeholder="Patient Name" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500">
-                    <input type="text" id="report-title" placeholder="Report Title (e.g., Annual Checkup)" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500">
-                    <textarea id="report-details" placeholder="Consultation Details and Findings" rows="6" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-sky-500 focus:border-sky-500"></textarea>
-                </div>
-                <div class="flex justify-end space-x-3 mt-6">
-                    <button type="button" onclick="closeConsultationModal()" class="px-4 py-2 text-gray-600 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-150">Cancel</button>
-                    <button type="submit" class="px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 transition duration-150 shadow-md">Submit Report</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Firebase SDK Imports -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc, updateDoc, deleteDoc, where, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Global Firebase Variables
-        let app;
-        let db;
-        let auth;
-        let userId;
-        let userRole = 'nurse'; // Default role
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        setLogLevel('Debug'); // Enable Firestore logging
-
-        // --- UTILITY FUNCTIONS ---
         
-        // Custom Alert/Confirmation Box
-        function alertBox(title, message, isConfirm = false, onConfirm = () => {}) {
-            const modal = document.getElementById('alert-box-modal');
-            document.getElementById('alert-title').textContent = title;
-            document.getElementById('alert-message').textContent = message;
-            const actions = document.getElementById('alert-actions');
-            actions.innerHTML = '';
+        <div id="dashboard-content" class="hidden">
             
-            const closeBtn = document.createElement('button');
-            closeBtn.className = 'px-4 py-2 text-white bg-indigo-500 rounded-lg hover:bg-indigo-600 transition duration-150';
-            closeBtn.textContent = 'OK';
-            closeBtn.onclick = () => modal.classList.add('hidden');
-            
-            if (isConfirm) {
-                const cancelBtn = document.createElement('button');
-                cancelBtn.className = 'px-4 py-2 text-gray-600 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-150';
-                cancelBtn.textContent = 'Cancel';
-                cancelBtn.onclick = () => modal.classList.add('hidden');
-                actions.appendChild(cancelBtn);
+            <!-- Management Grid -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
                 
-                const confirmBtn = document.createElement('button');
-                confirmBtn.className = 'px-4 py-2 text-white bg-red-500 rounded-lg hover:bg-red-600 transition duration-150';
-                confirmBtn.textContent = 'Confirm';
-                confirmBtn.onclick = () => {
-                    onConfirm();
-                    modal.classList.add('hidden');
-                };
-                actions.appendChild(confirmBtn);
-            } else {
-                actions.appendChild(closeBtn);
-            }
+                <!-- 1. Patient Management Card -->
+                <div class="dashboard-card p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow col-span-1 lg:col-span-2">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                        <svg class="w-6 h-6 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H9a1 1 0 01-1-1v-1a4 4 0 014-4h.01"></path></svg>
+                        Patient Queue & Status (Personal)
+                        <button onclick="showAddPatientModal()" class="ml-auto bg-green-500 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-green-600 transition duration-150 shadow-md">
+                            Add Patient
+                        </button>
+                    </h2>
+                    
+                    <div class="overflow-x-auto custom-scrollbar max-h-96">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50 sticky-header">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider rounded-tl-lg">Patient</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Age/Complaint</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider rounded-tr-lg">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="patient-list" class="bg-white divide-y divide-gray-200">
+                                <!-- Patient rows will be injected here -->
+                                <tr><td colspan="4" class="text-center py-4 text-gray-500">No patients in the queue.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
 
-            modal.classList.remove('hidden');
-        }
+                <!-- 2. Inventory & User Management Card (Admin Only) -->
+                <div id="admin-management-card" class="dashboard-card p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                        <svg class="w-6 h-6 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37a1.724 1.724 0 002.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                        Admin/Inventory
+                    </h2>
 
-        // --- DASHBOARD RENDERING FUNCTIONS ---
+                    <!-- Inventory Section -->
+                    <h3 class="text-lg font-semibold text-gray-700 mt-4 mb-2 border-b pb-1">Inventory (Public)</h3>
+                    <div id="inventory-list" class="space-y-3 max-h-40 overflow-y-auto custom-scrollbar">
+                        <!-- Inventory items will be injected here -->
+                    </div>
+                    <div class="mt-4">
+                        <input type="text" id="new-item-name" placeholder="Item Name" class="w-full p-2 border border-gray-300 rounded-lg text-sm mb-2">
+                        <input type="number" id="new-item-stock" placeholder="Stock" class="w-full p-2 border border-gray-300 rounded-lg text-sm mb-3">
+                        <button onclick="addInventoryItem()" class="w-full bg-indigo-500 text-white text-sm font-medium py-2 rounded-lg hover:bg-indigo-600 transition duration-150">Add/Update Item</button>
+                    </div>
 
-        function renderPatients(patients) {
-            const list = document.getElementById('patient-list');
-            list.innerHTML = '';
-            if (patients.length === 0) {
-                list.innerHTML = '<p class="text-center text-gray-400 p-4">No patients registered.</p>';
-                return;
-            }
+                    <!-- User Role Management Section -->
+                    <h3 class="text-lg font-semibold text-gray-700 mt-6 mb-2 border-b pb-1">User Roles (Public Roles)</h3>
+                    <div id="user-role-management-list" class="space-y-3 max-h-40 overflow-y-auto custom-scrollbar">
+                        <p class="text-sm text-gray-500">Loading staff roles...</p>
+                        <!-- User list will be injected here -->
+                    </div>
 
-            patients.forEach(patient => {
-                const age = new Date().getFullYear() - new Date(patient.dob).getFullYear();
-                const card = document.createElement('div');
-                card.className = 'bg-white p-3 border rounded-lg shadow-sm flex justify-between items-center transition duration-150 hover:shadow-md';
+                </div>
+
+            </div>
+
+            <!-- Global Tasks & Consultation Reports Section (Full Width) -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 
-                const statusColor = patient.status === 'Waiting' ? 'bg-yellow-100 text-yellow-800' :
-                                    patient.status === 'Consulting' ? 'bg-indigo-100 text-indigo-800' :
-                                    'bg-green-100 text-green-800';
-                
-                card.innerHTML = `
-                    <div>
-                        <p class="font-semibold text-gray-800">${patient.name}</p>
-                        <p class="text-sm text-gray-500">Age: ${age} | Status: <span class="${statusColor} text-xs font-medium px-2 py-0.5 rounded-full">${patient.status}</span></p>
+                <!-- 3. Global Tasks Card -->
+                <div class="dashboard-card p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                        <svg class="w-6 h-6 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+                        Global Staff Tasks (Public)
+                    </h2>
+                    <div id="global-task-list" class="space-y-3 max-h-72 overflow-y-auto custom-scrollbar mb-4">
+                        <!-- Task items will be injected here -->
+                        <p class="text-sm text-gray-500">No global tasks currently.</p>
                     </div>
                     <div class="flex space-x-2">
-                        <button onclick="showConsultationModal('${patient.name}')" title="Add Report" class="text-sky-500 hover:text-sky-700 transition duration-150">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                        </button>
-                        <select onchange="updatePatientStatus('${patient.id}', this.value)" class="text-sm p-1 border rounded-lg">
-                            <option value="Waiting" ${patient.status === 'Waiting' ? 'selected' : ''}>Waiting</option>
-                            <option value="Consulting" ${patient.status === 'Consulting' ? 'selected' : ''}>Consulting</option>
-                            <option value="Treated" ${patient.status === 'Treated' ? 'selected' : ''}>Treated</option>
-                        </select>
+                        <input type="text" id="new-global-task-text" placeholder="New staff task..." class="flex-grow p-2 border border-gray-300 rounded-lg text-sm">
+                        <button onclick="addGlobalTask()" class="bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-indigo-600 transition duration-150 shadow-md">Add</button>
                     </div>
-                `;
-                list.appendChild(card);
-            });
-        }
+                </div>
 
-        function renderTasks(tasks) {
-            const list = document.getElementById('task-list');
-            list.innerHTML = '';
-            if (tasks.length === 0) {
-                list.innerHTML = '<p class="text-center text-gray-400 p-4">No global tasks.</p>';
-                return;
-            }
-
-            tasks.sort((a, b) => a.timestamp.toDate() - b.timestamp.toDate()); // Sort by creation time
-
-            tasks.forEach(task => {
-                const item = document.createElement('div');
-                item.className = 'bg-white p-3 border rounded-lg shadow-sm flex justify-between items-center';
-                item.innerHTML = `
-                    <p class="text-gray-700">${task.description}</p>
-                    <button onclick="deleteGlobalTask('${task.id}')" title="Delete Task" class="text-red-400 hover:text-red-600 transition duration-150">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                    </button>
-                `;
-                list.appendChild(item);
-            });
-        }
-
-        function renderInventory(inventory) {
-            const list = document.getElementById('inventory-list');
-            list.innerHTML = '';
-            if (inventory.length === 0) {
-                list.innerHTML = '<p class="text-center text-gray-400 p-4">Inventory is empty.</p>';
-                return;
-            }
-
-            inventory.forEach(item => {
-                const isLow = item.quantity < 10;
-                const statusClass = isLow ? 'text-red-500 font-bold' : 'text-gray-700';
-                
-                const card = document.createElement('div');
-                card.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg border';
-                card.innerHTML = `
-                    <div>
-                        <p class="font-medium text-gray-800">${item.name}</p>
-                        <p class="text-sm ${statusClass}">Quantity: ${item.quantity}</p>
-                        ${isLow ? '<p class="text-xs text-red-500">Low Stock!</p>' : ''}
+                <!-- 4. Consultation Reports Card -->
+                <div class="dashboard-card p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
+                        <svg class="w-6 h-6 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                        Consultation Reports (Public)
+                    </h2>
+                    <div class="overflow-y-auto custom-scrollbar max-h-80">
+                        <ul id="consultation-reports-list" class="divide-y divide-gray-200">
+                            <!-- Reports will be injected here -->
+                            <li class="py-3 text-gray-500 text-sm">No reports available.</li>
+                        </ul>
                     </div>
-                    <div class="flex items-center space-x-2">
-                        <input type="number" min="0" value="${item.quantity}" id="qty-${item.id}" class="w-16 p-1 border rounded-lg text-center text-sm">
-                        <button onclick="updateInventory('${item.id}', document.getElementById('qty-${item.id}').value)" class="text-indigo-500 hover:text-indigo-700 transition duration-150" title="Update Quantity">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                        </button>
-                    </div>
-                `;
-                list.appendChild(card);
-            });
-        }
+                </div>
 
-        function renderReports(reports) {
-            const list = document.getElementById('reports-list');
-            list.innerHTML = '';
-            if (reports.length === 0) {
-                list.innerHTML = '<p class="text-center text-gray-400 p-4">No consultation reports have been filed yet.</p>';
-                return;
-            }
+            </div>
 
-            reports.sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate()); // Sort by newest first
+        </div> <!-- End of dashboard-content -->
 
-            reports.forEach(report => {
-                const date = report.timestamp.toDate().toLocaleDateString();
-                const time = report.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                
-                const card = document.createElement('div');
-                card.className = 'bg-white p-4 border rounded-xl shadow-md space-y-2';
-                card.innerHTML = `
-                    <div class="flex justify-between items-start">
-                        <div>
-                            <p class="text-lg font-bold text-sky-700">${report.title}</p>
-                            <p class="text-sm font-medium text-gray-600">Patient: ${report.patientName}</p>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-xs text-gray-500">${date} at ${time}</p>
-                            <p class="text-xs text-gray-500">Filed by: ${report.createdByRole}</p>
-                            <button onclick="deleteConsultationReport('${report.id}')" title="Delete Report" class="text-red-400 hover:text-red-600 ml-2">
-                                <svg class="w-4 h-4 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                            </button>
-                        </div>
-                    </div>
-                    <p class="text-gray-700 text-sm italic border-t pt-2">${report.details.substring(0, 200)}${report.details.length > 200 ? '...' : ''}</p>
-                `;
-                list.appendChild(card);
-            });
-        }
+    </main>
+    
+    <!-- Footer -->
+    <footer class="p-4 text-center text-sm text-gray-500 border-t mt-8">
+        Clinic System Dashboard | Powered by Firebase & Tailwind CSS
+    </footer>
 
-        function renderUserRoles(users) {
-            const list = document.getElementById('user-role-list');
-            const adminCard = document.getElementById('user-management-card');
-            
-            // Only show the card if the current user is an admin
-            if (userRole === 'admin') {
-                adminCard.classList.remove('hidden');
-            } else {
-                adminCard.classList.add('hidden');
-                return; // Stop execution if not admin
-            }
-            
-            list.innerHTML = '';
-            if (users.length === 0) {
-                list.innerHTML = '<p class="text-center text-gray-400 p-4">No users found.</p>';
-                return;
-            }
 
-            users.forEach(user => {
-                const card = document.createElement('div');
-                card.className = 'flex justify-between items-center bg-gray-50 p-3 rounded-lg border';
-                card.innerHTML = `
-                    <div>
-                        <p class="font-medium text-gray-800">${user.id === userId ? 'You' : 'User'}</p>
-                        <p class="text-xs text-gray-500 break-all">ID: ${user.id}</p>
-                    </div>
-                    <select onchange="updateUserRole('${user.id}', this.value)" class="text-sm p-1 border rounded-lg">
-                        <option value="nurse" ${user.role === 'nurse' ? 'selected' : ''}>Nurse</option>
-                        <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option>
-                    </select>
-                `;
-                list.appendChild(card);
-            });
-        }
+    <!-- Firebase Imports and Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc, deleteDoc, updateDoc, 
+            serverTimestamp
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
-        // --- CRUD OPERATIONS ---
-
-        async function addNewPatient(e) {
-            e.preventDefault();
-            const name = document.getElementById('patient-name').value;
-            const dob = document.getElementById('patient-dob').value;
-            const status = document.getElementById('patient-status').value;
-
-            if (!name || !dob || !status) {
-                alertBox('Error', 'Please fill in all patient details.');
-                return;
-            }
-            
-            try {
-                const patientsRef = collection(db, 'artifacts', appId, 'public', 'data', 'patients');
-                await addDoc(patientsRef, {
-                    name,
-                    dob,
-                    status,
-                    createdByUserId: userId,
-                    createdByRole: userRole,
-                    createdAt: new Date(),
-                });
-                closeAddPatientModal();
-            } catch (error) {
-                console.error("Error adding patient:", error);
-                alertBox('Error', `Could not add patient. ${error.message}`);
-            }
-        }
-
-        async function updatePatientStatus(patientId, newStatus) {
-            try {
-                const patientRef = doc(db, 'artifacts', appId, 'public', 'data', 'patients', patientId);
-                await updateDoc(patientRef, {
-                    status: newStatus
-                });
-            } catch (error) {
-                console.error("Error updating patient status:", error);
-                alertBox('Error', `Could not update patient status. ${error.message}`);
-            }
-        }
+        // Hardcoded Firebase Config (Fallback for local testing)
+        const HARDCODED_FIREBASE_CONFIG = {
+            apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
+            authDomain: "clinic-system-1579b.firebaseapp.com",
+            projectId: "clinic-system-1579b",
+            storageBucket: "clinic-system-1579b.firebasestorage.app",
+            messagingSenderId: "211282606869",
+            appId: "1:211282606869:web:853ddeee9ddba036b1c71c",
+            measurementId: "G-B2GSH85BMT"
+        };
         
-        async function updateInventory(itemId, newQuantity) {
-            try {
-                const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'inventory', itemId);
-                await updateDoc(itemRef, {
-                    quantity: parseInt(newQuantity, 10)
-                });
-            } catch (error) {
-                console.error("Error updating inventory:", error);
-                alertBox('Error', `Could not update inventory. ${error.message}`);
-            }
+        // --- GLOBAL VARIABLES & SESSION RETRIEVAL ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'clinic-default-app';
+        
+        // Load config from environment or use the hardcoded fallback
+        let firebaseConfig = HARDCODED_FIREBASE_CONFIG;
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+             try {
+                firebaseConfig = JSON.parse(__firebase_config);
+             } catch (e) {
+                console.warn("Could not parse environment __firebase_config, using hardcoded fallback.");
+             }
         }
 
-        async function addGlobalTask() {
-            const input = document.getElementById('new-task-input');
-            const description = input.value.trim();
-            if (description === "") return;
+        let db, auth;
+        // Retrieve the authenticated user's details from sessionStorage (set by index.html)
+        const currentFirebaseUid = sessionStorage.getItem('clinic_auth_uid');
+        const currentUserKey = sessionStorage.getItem('clinic_user_key');
+        let currentUserRole = sessionStorage.getItem('clinic_user_role') || 'Unknown';
+        const currentUserName = sessionStorage.getItem('clinic_user_name') || 'Staff Member';
 
-            try {
-                const tasksRef = collection(db, 'artifacts', appId, 'public', 'data', 'global_tasks');
-                await addDoc(tasksRef, {
-                    description: description,
-                    isComplete: false,
-                    timestamp: new Date()
-                });
-                input.value = '';
-            } catch (error) {
-                console.error("Error adding task:", error);
-                alertBox('Error', `Could not add task. ${error.message}`);
-            }
+        let isAuthReady = false;
+
+        // --- UI ELEMENTS ---
+        const loadingStatus = document.getElementById('loading-status');
+        const errorAlert = document.getElementById('error-alert');
+        const errorText = document.getElementById('error-text');
+        const dashboardContent = document.getElementById('dashboard-content');
+        const patientList = document.getElementById('patient-list');
+        const inventoryList = document.getElementById('inventory-list');
+        const globalTaskList = document.getElementById('global-task-list');
+        const consultationReportsList = document.getElementById('consultation-reports-list');
+        const signOutBtn = document.getElementById('sign-out-btn');
+        const userKeyDisplay = document.getElementById('user-key-display'); // Updated ID
+        const userRoleDisplay = document.getElementById('user-role-display');
+        const adminManagementCard = document.getElementById('admin-management-card');
+        const addPatientModal = document.getElementById('add-patient-modal');
+        const consultationModal = document.getElementById('consultation-modal');
+
+        // --- UTILITY FUNCTIONS ---
+
+        /** Shows a temporary alert message box. */
+        function alertBox(message, duration = 3000) {
+            const alertBox = document.getElementById('alert-box');
+            document.getElementById('alert-message').textContent = message;
+            alertBox.classList.remove('opacity-0', 'pointer-events-none');
+            alertBox.classList.add('opacity-100');
+
+            setTimeout(() => {
+                alertBox.classList.add('opacity-0', 'pointer-events-none');
+                alertBox.classList.remove('opacity-100');
+            }, duration);
         }
 
-        function deleteGlobalTask(taskId) {
-            alertBox('Confirm Delete', 'Are you sure you want to delete this task?', true, async () => {
-                try {
-                    const taskRef = doc(db, 'artifacts', appId, 'public', 'data', 'global_tasks', taskId);
-                    await deleteDoc(taskRef);
-                } catch (error) {
-                    console.error("Error deleting task:", error);
-                    alertBox('Error', `Could not delete task. ${error.message}`);
+        /** Checks session data. If invalid, redirects to login. */
+        function checkAuthAndRedirect() {
+            if (!currentFirebaseUid || !currentUserKey) {
+                console.error("Session key or UID missing. Redirecting.");
+                // Redirect only if Firebase is not yet initialized and session is invalid
+                if (!isAuthReady) {
+                    window.location.href = 'index.html';
                 }
-            });
-        }
-        
-        function deleteConsultationReport(reportId) {
-            alertBox('Confirm Delete', 'Are you sure you want to delete this report? This action is permanent.', true, async () => {
-                try {
-                    const reportRef = doc(db, 'artifacts', appId, 'public', 'data', 'consultation_reports', reportId);
-                    await deleteDoc(reportRef);
-                } catch (error) {
-                    console.error("Error deleting report:", error);
-                    alertBox('Error', `Could not delete report. ${error.message}`);
-                }
-            });
-        }
-        
-        async function submitConsultationReport(e) {
-            e.preventDefault();
-            const patientName = document.getElementById('report-patient-name').value;
-            const title = document.getElementById('report-title').value;
-            const details = document.getElementById('report-details').value;
-
-            if (!patientName || !title || !details) {
-                alertBox('Error', 'Please fill in all report fields.');
-                return;
+                return false;
             }
-
-            try {
-                const reportsRef = collection(db, 'artifacts', appId, 'public', 'data', 'consultation_reports');
-                await addDoc(reportsRef, {
-                    patientName,
-                    title,
-                    details,
-                    createdByUserId: userId,
-                    createdByRole: userRole,
-                    timestamp: new Date()
-                });
-                closeConsultationModal();
-            } catch (error) {
-                console.error("Error submitting report:", error);
-                alertBox('Error', `Could not submit report. ${error.message}`);
-            }
+            return true;
         }
 
-        async function updateUserRole(targetUserId, newRole) {
-            try {
-                const userRoleRef = doc(db, 'artifacts', appId, 'public', 'data', 'user_roles', targetUserId);
-                await setDoc(userRoleRef, { role: newRole, lastUpdated: new Date() }, { merge: true });
-                
-                // If the current user changes their own role, the listener will update the state
-                if (targetUserId === userId) {
-                    userRole = newRole;
-                    document.getElementById('user-role-display').textContent = newRole.charAt(0).toUpperCase() + newRole.slice(1);
-                }
-            } catch (error) {
-                console.error("Error updating user role:", error);
-                alertBox('Error', `Could not update role. ${error.message}`);
-            }
-        }
-        
-        // --- MODAL CONTROLS ---
+        // --- FIREBASE PATH HELPERS ---
 
-        function showAddPatientModal() {
-            document.getElementById('add-patient-modal').classList.remove('hidden');
-        }
+        /** Gets the path for the private collection of the current user. */
+        const getUserPrivateCollectionPath = (collectionName) => 
+            `artifacts/${appId}/users/${currentFirebaseUid}/${collectionName}`;
 
-        function closeAddPatientModal() {
-            document.getElementById('add-patient-form').reset();
-            document.getElementById('add-patient-modal').classList.add('hidden');
-        }
-        
-        function showConsultationModal(patientName = '') {
-            document.getElementById('report-patient-name').value = patientName;
-            document.getElementById('consultation-modal').classList.remove('hidden');
-        }
+        /** Gets the path for a public collection. */
+        const getPublicCollectionPath = (collectionName) => 
+            `artifacts/${appId}/public/data/${collectionName}`;
 
-        function closeConsultationModal() {
-            document.getElementById('consultation-form').reset();
-            document.getElementById('consultation-modal').classList.add('hidden');
-        }
-        
-        function handleLogout() {
-            signOut(auth).then(() => {
-                // Redirect to login page after sign out
-                window.location.href = 'index.html';
-            }).catch((error) => {
-                console.error("Logout failed:", error);
-                alertBox('Logout Error', 'Could not log out successfully. Please try again.');
-            });
-        }
-
-        // --- FIREBASE INITIALIZATION AND LISTENERS ---
-        
-        async function loadInitialData() {
-            // Set up all real-time listeners AFTER authentication is confirmed
-            const loadingOverlay = document.getElementById('loading-overlay');
-            const mainContent = document.getElementById('main-dashboard-content');
-            loadingOverlay.classList.remove('hidden');
-            mainContent.classList.add('hidden');
-
-            // 1. Listen for Patients
-            const patientsRef = collection(db, 'artifacts', appId, 'public', 'data', 'patients');
-            onSnapshot(patientsRef, (snapshot) => {
-                const patients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                renderPatients(patients);
-            }, (error) => console.error("Patient Listener Error:", error));
-
-            // 2. Listen for Global Tasks
-            const tasksRef = collection(db, 'artifacts', appId, 'public', 'data', 'global_tasks');
-            onSnapshot(tasksRef, (snapshot) => {
-                const tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                renderTasks(tasks);
-            }, (error) => console.error("Task Listener Error:", error));
-
-            // 3. Listen for Inventory
-            const inventoryRef = collection(db, 'artifacts', appId, 'public', 'data', 'inventory');
-            onSnapshot(inventoryRef, (snapshot) => {
-                const inventory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                renderInventory(inventory);
-            }, (error) => console.error("Inventory Listener Error:", error));
-
-            // 4. Listen for Consultation Reports
-            const reportsRef = collection(db, 'artifacts', appId, 'public', 'data', 'consultation_reports');
-            onSnapshot(reportsRef, (snapshot) => {
-                const reports = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                renderReports(reports);
-            }, (error) => console.error("Reports Listener Error:", error));
-
-            // 5. Listen for User Roles
-            const rolesRef = collection(db, 'artifacts', appId, 'public', 'data', 'user_roles');
-            onSnapshot(rolesRef, (snapshot) => {
-                const userRoles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                renderUserRoles(userRoles);
-                
-                // Hide loading overlay and show content once initial data is loaded
-                loadingOverlay.classList.add('hidden');
-                mainContent.classList.remove('hidden');
-            }, (error) => console.error("User Role Listener Error:", error));
-            
-        }
+        // --- AUTH AND INITIALIZATION ---
 
         async function initFirebase() {
+            // Check session before starting initialization
+            if (!checkAuthAndRedirect()) return;
+
+            // Check if we have a valid configuration object (either hardcoded or environment)
+            if (!firebaseConfig || !firebaseConfig.apiKey) {
+                errorText.textContent = "Firebase configuration is missing or invalid. Cannot initialize application.";
+                errorAlert.classList.remove('hidden');
+                loadingStatus.classList.add('hidden');
+                return;
+            }
+
             try {
-                if (Object.keys(firebaseConfig).length === 0) {
-                    throw new Error("Firebase configuration is missing.");
-                }
-                
-                app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
+                const app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
-                
-                // Add logout handler
-                document.getElementById('logout-button').addEventListener('click', handleLogout);
+                db = getFirestore(app);
+                isAuthReady = true;
 
-                // --- CRITICAL CHANGE: Use onAuthStateChanged for Auth Guard ---
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        userId = user.uid;
-                        document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                // --- UI UPDATE BASED ON SESSION DATA ---
+                userKeyDisplay.textContent = `Key: ${currentUserKey}`;
+                userRoleDisplay.textContent = currentUserRole.toUpperCase();
+                adminManagementCard.classList.toggle('hidden', currentUserRole !== 'admin');
+                loadingStatus.classList.add('hidden');
+                dashboardContent.classList.remove('hidden');
+                // --- END UI UPDATE ---
 
-                        // Check and set user role
-                        const userRoleRef = doc(db, 'artifacts', appId, 'public', 'data', 'user_roles', userId);
-                        const roleSnap = await getDoc(userRoleRef);
-                        
-                        if (roleSnap.exists()) {
-                            userRole = roleSnap.data().role;
-                        } else {
-                            // First-time sign-in: Set default role to 'nurse'
-                            userRole = 'nurse';
-                            await setDoc(userRoleRef, { role: userRole, lastUpdated: new Date() });
-                        }
-                        
-                        document.getElementById('user-role-display').textContent = userRole.charAt(0).toUpperCase() + userRole.slice(1);
-                        
-                        // Proceed to load data and set up listeners
-                        loadInitialData();
+                startRealTimeListeners();
 
-                    } else {
-                        // NO USER: Redirect back to login page (Auth Guard)
-                        console.log("No authenticated user found. Redirecting to login.");
-                        window.location.href = 'index.html';
-                    }
+                signOutBtn.addEventListener('click', async () => {
+                    // Firebase sign out is often optional if using anonymous auth, but good practice
+                    if(auth.currentUser) await signOut(auth); 
+                    sessionStorage.clear(); // Clear session data on sign out
+                    window.location.href = 'index.html';
                 });
 
             } catch (e) {
                 console.error("Firebase initialization failed:", e);
-                alertBox('Initialization Error', `System failed to start: ${e.message}`);
-                // Ensure no continuous loop by manually logging out if an error occurs
-                window.location.href = 'index.html';
+                errorText.textContent = `Firebase initialization failed: ${e.message}`;
+                errorAlert.classList.remove('hidden');
+                loadingStatus.classList.add('hidden');
             }
         }
-        
-        // Expose functions globally for use in HTML attributes
+
+        // --- REAL-TIME LISTENERS ---
+
+        function startRealTimeListeners() {
+            if (!isAuthReady || !db) return;
+
+            // 1. Listen for Patients (Private Data)
+            // NOTE: Using the Firebase UID for the patient queue path
+            onSnapshot(collection(db, getUserPrivateCollectionPath('patients')), (snapshot) => {
+                const patients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderPatients(patients);
+            }, (error) => console.error("Error listening to patients:", error));
+
+            // 2. Listen for Inventory (Public Data)
+            onSnapshot(collection(db, getPublicCollectionPath('inventory')), (snapshot) => {
+                const inventory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderInventory(inventory);
+            }, (error) => console.error("Error listening to inventory:", error));
+
+            // 3. Listen for Global Tasks (Public Data)
+            onSnapshot(collection(db, getPublicCollectionPath('global_tasks')), (snapshot) => {
+                const tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderGlobalTasks(tasks);
+            }, (error) => console.error("Error listening to tasks:", error));
+
+            // 4. Listen for Consultation Reports (Public Data)
+            onSnapshot(collection(db, getPublicCollectionPath('consultation_reports')), (snapshot) => {
+                const reports = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderConsultationReports(reports);
+            }, (error) => console.error("Error listening to reports:", error));
+            
+            // 5. Listen for ALL User Roles (Public Roles Collection) - For Admin management and UI refresh
+            listenToAllUserRoles();
+        }
+
+        // 5. Listen for ALL User Roles (Public Roles Collection) - For Admin management
+        function listenToAllUserRoles() {
+            const rolesCollectionPath = getPublicCollectionPath('roles');
+            onSnapshot(collection(db, rolesCollectionPath), (snapshot) => {
+                const userListContainer = document.getElementById('user-role-management-list');
+                userListContainer.innerHTML = '';
+                
+                if (snapshot.docs.length === 0) {
+                    userListContainer.innerHTML = '<p class="text-sm text-gray-500">No staff roles configured.</p>';
+                    return;
+                }
+
+                snapshot.docs.forEach(doc => {
+                    const roleData = doc.data();
+                    const userKey = doc.id; // User key is the document ID
+                    renderUserRoleItem(userKey, roleData.role, roleData.name);
+                });
+
+            }, (error) => console.error("Error listening to user roles:", error));
+        }
+
+        // --- RENDER FUNCTIONS ---
+
+        function renderPatients(patients) {
+            patientList.innerHTML = '';
+            if (patients.length === 0) {
+                patientList.innerHTML = '<tr><td colspan="4" class="text-center py-4 text-gray-500">No patients in the queue.</td></tr>';
+                return;
+            }
+
+            patients.sort((a, b) => (a.status === 'Waiting' ? -1 : 1)); // Prioritize waiting patients
+
+            patients.forEach(patient => {
+                const statusColor = {
+                    'Waiting': 'bg-yellow-100 text-yellow-800',
+                    'In Consultation': 'bg-blue-100 text-blue-800',
+                    'Discharged': 'bg-green-100 text-green-800'
+                }[patient.status] || 'bg-gray-100 text-gray-800';
+
+                const row = document.createElement('tr');
+                row.className = 'hover:bg-gray-50 transition duration-150';
+                row.innerHTML = `
+                    <td class="px-4 py-3 whitespace-nowrap font-medium text-gray-900">${patient.name}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                        <span class="font-semibold">${patient.age} y/o</span>
+                        <p class="text-xs truncate" title="${patient.complaint}">${patient.complaint}</p>
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap">
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColor}">
+                            ${patient.status}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                        <select onchange="updatePatientStatus('${patient.id}', this.value)" class="bg-white border border-gray-300 text-gray-700 py-1 px-2 rounded-lg text-xs shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                            <option value="Waiting" ${patient.status === 'Waiting' ? 'selected' : ''}>Waiting</option>
+                            <option value="In Consultation" ${patient.status === 'In Consultation' ? 'selected' : ''}>Consult</option>
+                            <option value="Discharged" ${patient.status === 'Discharged' ? 'selected' : ''}>Discharged</option>
+                        </select>
+                        <button onclick="showConsultationModal('${patient.id}', '${patient.name}')" class="text-indigo-600 hover:text-indigo-900 text-xs font-medium bg-indigo-50 px-2 py-1 rounded-lg">Report</button>
+                    </td>
+                `;
+                patientList.appendChild(row);
+            });
+        }
+
+        function renderInventory(inventory) {
+            inventoryList.innerHTML = '';
+            if (inventory.length === 0) {
+                inventoryList.innerHTML = '<p class="text-sm text-gray-500">Inventory is empty.</p>';
+                return;
+            }
+            
+            inventory.sort((a, b) => a.name.localeCompare(b.name)).forEach(item => {
+                // Use 'quantity' field from index.html seeding
+                const stock = item.quantity || 0;
+                const stockColor = stock < 10 ? 'text-red-600 font-bold' : 'text-green-600';
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'flex items-center justify-between p-2 bg-gray-50 rounded-lg shadow-sm';
+                itemDiv.innerHTML = `
+                    <span class="text-sm text-gray-700 font-medium">${item.name}</span>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-xs ${stockColor}">Stock: ${stock} ${item.unit || ''}</span>
+                        <button onclick="updateInventory('${item.id}', ${stock - 1})" class="text-red-500 hover:text-red-700 text-xs font-semibold" title="Decrement Stock" ${stock <= 0 ? 'disabled' : ''}>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </button>
+                        <button onclick="updateInventory('${item.id}', ${stock + 1})" class="text-green-500 hover:text-green-700 text-xs font-semibold" title="Increment Stock">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </button>
+                    </div>
+                `;
+                inventoryList.appendChild(itemDiv);
+            });
+        }
+
+        function renderGlobalTasks(tasks) {
+            globalTaskList.innerHTML = '';
+            if (tasks.length === 0) {
+                globalTaskList.innerHTML = '<p class="text-sm text-gray-500">No global tasks currently.</p>';
+                return;
+            }
+
+            tasks.sort((a, b) => b.timestamp - a.timestamp).forEach(task => {
+                const date = new Date(task.timestamp?.toDate ? task.timestamp.toDate() : Date.now()).toLocaleDateString();
+                const taskDiv = document.createElement('div');
+                taskDiv.className = 'flex items-start justify-between p-3 bg-white rounded-lg border border-gray-200 shadow-sm';
+                taskDiv.innerHTML = `
+                    <p class="text-sm text-gray-700 flex-grow mr-4">${task.text}</p>
+                    <div class="flex-shrink-0 flex items-center space-x-2">
+                        <span class="text-xs text-gray-400">By ${task.filerKey.substring(0, 4)}... on ${date}</span>
+                        <button onclick="deleteGlobalTask('${task.id}')" class="text-red-400 hover:text-red-600 transition duration-150" title="Delete Task">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
+                    </div>
+                `;
+                globalTaskList.appendChild(taskDiv);
+            });
+        }
+
+        function renderConsultationReports(reports) {
+            consultationReportsList.innerHTML = '';
+            if (reports.length === 0) {
+                consultationReportsList.innerHTML = '<li class="py-3 text-gray-500 text-sm">No reports available.</li>';
+                return;
+            }
+
+            reports.sort((a, b) => b.timestamp - a.timestamp).forEach(report => {
+                const date = new Date(report.timestamp?.toDate ? report.timestamp.toDate() : Date.now()).toLocaleString();
+                const reportLi = document.createElement('li');
+                reportLi.className = 'py-3 flex justify-between items-center hover:bg-gray-50 px-2 rounded-lg';
+                reportLi.innerHTML = `
+                    <div>
+                        <p class="font-semibold text-gray-800">${report.patientName} <span class="text-xs text-gray-500 ml-2">(${report.diagnosis})</span></p>
+                        <p class="text-sm text-gray-600 italic truncate" title="${report.notes}">${report.notes}</p>
+                        <p class="text-xs text-gray-400">Filed by: ${report.filerKey} on ${date}</p>
+                    </div>
+                    ${currentUserRole === 'admin' ? `
+                        <button onclick="deleteConsultationReport('${report.id}')" class="text-red-400 hover:text-red-600 transition duration-150 ml-4" title="Delete Report (Admin)">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
+                    ` : ''}
+                `;
+                consultationReportsList.appendChild(reportLi);
+            });
+        }
+
+        function renderUserRoleItem(userKey, role, name) {
+            const userListContainer = document.getElementById('user-role-management-list');
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'flex items-center justify-between p-2 bg-white rounded-lg shadow-sm border border-gray-200';
+            const isCurrentUser = userKey === currentUserKey;
+            
+            const displayRole = role.charAt(0).toUpperCase() + role.slice(1);
+            
+            itemDiv.innerHTML = `
+                <span class="text-sm font-semibold truncate" title="${userKey}" style="max-width: 150px;">
+                    ${name} (${isCurrentUser ? 'You' : userKey})
+                </span>
+                <div class="flex items-center space-x-2">
+                    <span class="text-xs font-semibold ${role === 'admin' ? 'text-indigo-600' : 'text-gray-600'}">${displayRole}</span>
+                    <select 
+                        onchange="updateUserRole('${userKey}', this.value)" 
+                        class="bg-white border border-gray-300 text-gray-700 py-1 px-2 rounded-lg text-xs shadow-sm"
+                        ${isCurrentUser || currentUserRole !== 'admin' ? 'disabled' : ''}
+                    >
+                        <option value="nurse" ${role === 'nurse' ? 'selected' : ''}>Nurse</option>
+                        <option value="admin" ${role === 'admin' ? 'selected' : ''}>Admin</option>
+                    </select>
+                </div>
+            `;
+            userListContainer.appendChild(itemDiv);
+        }
+
+        // --- CRUD / ACTION FUNCTIONS ---
+
+        // Patient Management
+        function showAddPatientModal() {
+            document.getElementById('add-patient-form').reset();
+            addPatientModal.classList.remove('hidden');
+            addPatientModal.classList.add('flex');
+        }
+
+        function closeAddPatientModal() {
+            addPatientModal.classList.add('hidden');
+            addPatientModal.classList.remove('flex');
+        }
+
+        async function addNewPatient(event) {
+            event.preventDefault();
+            closeAddPatientModal();
+
+            const name = document.getElementById('patient-name').value.trim();
+            const age = parseInt(document.getElementById('patient-age').value);
+            const complaint = document.getElementById('patient-complaint').value.trim();
+
+            if (!name || isNaN(age) || !complaint || !db) {
+                alertBox("Please ensure all patient fields are filled correctly.", 4000);
+                return;
+            }
+
+            try {
+                // Patient queue is private, indexed by the Firebase UID
+                await addDoc(collection(db, getUserPrivateCollectionPath('patients')), {
+                    name,
+                    age,
+                    complaint,
+                    status: 'Waiting',
+                    checkIn: serverTimestamp(),
+                    filerKey: currentUserKey // Use the logical clinic key for tracking staff activity
+                });
+                alertBox(`${name} added to the queue!`, 2000);
+            } catch (e) {
+                console.error("Error adding patient:", e);
+                alertBox(`Failed to add patient: ${e.message}`, 4000);
+            }
+        }
+
+        async function updatePatientStatus(patientId, newStatus) {
+            if (!db) return;
+            try {
+                // Patient queue is private, indexed by the Firebase UID
+                const docRef = doc(db, getUserPrivateCollectionPath('patients'), patientId);
+                await updateDoc(docRef, { status: newStatus });
+                alertBox(`Patient status updated to ${newStatus}.`, 2000);
+            } catch (e) {
+                console.error("Error updating patient status:", e);
+                alertBox(`Failed to update status: ${e.message}`, 4000);
+            }
+        }
+
+        // Inventory Management
+        async function addInventoryItem() {
+            const name = document.getElementById('new-item-name').value.trim();
+            const stock = parseInt(document.getElementById('new-item-stock').value);
+
+            if (!name || isNaN(stock) || stock < 0 || !db) {
+                alertBox("Invalid item name or stock number.", 4000);
+                return;
+            }
+
+            try {
+                // Use a normalized name as the document ID for easy lookup and uniqueness
+                const itemId = name.toLowerCase().replace(/\s/g, '-').replace(/[^a-z0-9-]/g, '');
+                
+                await setDoc(doc(db, getPublicCollectionPath('inventory'), itemId), {
+                    name: name,
+                    quantity: stock // Use quantity to match index.html seeding
+                }, { merge: true }); // Use merge to update existing items easily
+                
+                document.getElementById('new-item-name').value = '';
+                document.getElementById('new-item-stock').value = '';
+                alertBox(`${name} inventory item added/updated.`, 2000);
+            } catch (e) {
+                console.error("Error adding inventory item:", e);
+                alertBox(`Failed to add item: ${e.message}`, 4000);
+            }
+        }
+
+        async function updateInventory(itemId, newStock) {
+            if (!db || newStock < 0) return;
+            try {
+                const docRef = doc(db, getPublicCollectionPath('inventory'), itemId);
+                await updateDoc(docRef, { quantity: newStock }); // Use quantity to match index.html seeding
+            } catch (e) {
+                console.error("Error updating inventory:", e);
+                alertBox(`Failed to update inventory: ${e.message}`, 4000);
+            }
+        }
+
+        // Global Task Management
+        async function addGlobalTask() {
+            const text = document.getElementById('new-global-task-text').value.trim();
+            if (!text || !db) return;
+
+            try {
+                await addDoc(collection(db, getPublicCollectionPath('global_tasks')), {
+                    text,
+                    timestamp: serverTimestamp(),
+                    filerKey: currentUserKey // Use the logical clinic key
+                });
+                document.getElementById('new-global-task-text').value = '';
+                alertBox("New global task added!", 2000);
+            } catch (e) {
+                console.error("Error adding global task:", e);
+                alertBox(`Failed to add task: ${e.message}`, 4000);
+            }
+        }
+
+        async function deleteGlobalTask(taskId) {
+            if (!db) return;
+            try {
+                const docRef = doc(db, getPublicCollectionPath('global_tasks'), taskId);
+                await deleteDoc(docRef);
+                alertBox("Global task deleted.", 2000);
+            } catch (e) {
+                console.error("Error deleting global task:", e);
+                alertBox(`Failed to delete task: ${e.message}`, 4000);
+            }
+        }
+
+        // Consultation Report Management
+        function showConsultationModal(patientId, patientName) {
+            document.getElementById('consultation-form').reset();
+            document.getElementById('consultation-patient-id').value = patientId;
+            document.getElementById('consultation-patient-name').value = patientName;
+            consultationModal.classList.remove('hidden');
+            consultationModal.classList.add('flex');
+        }
+
+        function closeConsultationModal() {
+            consultationModal.classList.add('hidden');
+            consultationModal.classList.remove('flex');
+        }
+
+        async function submitConsultationReport(event) {
+            event.preventDefault();
+            closeConsultationModal();
+
+            const patientId = document.getElementById('consultation-patient-id').value;
+            const patientName = document.getElementById('consultation-patient-name').value;
+            const diagnosis = document.getElementById('consultation-diagnosis').value.trim();
+            const notes = document.getElementById('consultation-notes').value.trim();
+
+            if (!patientId || !diagnosis || !notes || !db) {
+                alertBox("Please fill out all report fields.", 4000);
+                return;
+            }
+
+            try {
+                // Add the report to the public collection
+                await addDoc(collection(db, getPublicCollectionPath('consultation_reports')), {
+                    patientId,
+                    patientName,
+                    diagnosis,
+                    notes,
+                    timestamp: serverTimestamp(),
+                    filerKey: currentUserKey // Use the logical clinic key
+                });
+                
+                // Set patient status to Discharged after filing report (private data)
+                const patientDocRef = doc(db, getUserPrivateCollectionPath('patients'), patientId);
+                await updateDoc(patientDocRef, { status: 'Discharged' });
+
+                alertBox(`Consultation report for ${patientName} filed and patient discharged.`, 3000);
+            } catch (e) {
+                console.error("Error submitting consultation report:", e);
+                alertBox(`Failed to submit report: ${e.message}`, 4000);
+            }
+        }
+
+        async function deleteConsultationReport(reportId) {
+            if (!db || currentUserRole !== 'admin') {
+                alertBox("Access Denied: Only Admin users can delete reports.", 2000);
+                return;
+            }
+            try {
+                const docRef = doc(db, getPublicCollectionPath('consultation_reports'), reportId);
+                await deleteDoc(docRef);
+                alertBox("Consultation report permanently deleted.", 2000);
+            } catch (e) {
+                console.error("Error deleting report:", e);
+                alertBox(`Failed to delete report: ${e.message}`, 4000);
+            }
+        }
+
+
+        // User Role Management (Admin only)
+        async function updateUserRole(userKey, newRole) {
+            if (!db || currentUserRole !== 'admin') {
+                alertBox("Access Denied: Only Admin can change staff roles.", 2000);
+                return;
+            }
+            if (userKey === currentUserKey) {
+                alertBox("You cannot change your own role.", 2000);
+                return;
+            }
+            
+            try {
+                // Role document is stored in the public collection, indexed by the user key
+                const roleDocRef = doc(db, getPublicCollectionPath('roles'), userKey);
+                await updateDoc(roleDocRef, { role: newRole });
+                alertBox(`Role for staff key ${userKey} updated to ${newRole.toUpperCase()}.`, 3000);
+                
+                // Note: The UI for the current user's role (top right) will only refresh
+                // after the current user logs out and logs back in to update sessionStorage,
+                // but the change is immediately reflected in the public list below.
+
+            } catch (e) {
+                console.error("Error updating staff role:", e);
+                alertBox(`Failed to update role: ${e.message}`, 4000);
+            }
+        }
+
+
+        // Expose functions to the global scope for inline event handlers
         window.addNewPatient = addNewPatient;
+        window.addInventoryItem = addInventoryItem;
         window.submitConsultationReport = submitConsultationReport;
         window.updateInventory = updateInventory;
         window.updatePatientStatus = updatePatientStatus;
@@ -708,7 +830,7 @@
             }
         });
 
-        // 2. Initialize Firebase and listeners on window load
+        // Initialize Firebase and listeners on window load
         window.onload = initFirebase;
     </script>
 </body>
