@@ -26,12 +26,12 @@
         <div id="login-form" class="hidden">
             <h2 class="text-xl font-semibold text-gray-700 mb-4">Role Verification</h2>
             <p class="text-sm text-gray-500 mb-4">
-                Enter your unique User ID/Key or leave blank if you are the System Admin using your primary device.
+                Enter your unique User ID/Key. Admins can leave the field blank (which uses the default Admin key).
             </p>
             
             <div class="mb-4">
-                <label for="user-id-input" class="block text-sm font-medium text-gray-700">User ID/Key (e.g., nurse_anne_margarette)</label>
-                <input type="text" id="user-id-input" placeholder="Optional for Admin. Required for Nurses."
+                <label for="user-id-input" class="block text-sm font-medium text-gray-700">User ID/Key</label>
+                <input type="text" id="user-id-input" placeholder="Enter key (e.g., nurse_ambe_ilona) or leave blank for Admin."
                     class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500">
             </div>
 
@@ -48,7 +48,10 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- HARDCODED CONFIGURATION for GitHub Pages DEPLOYMENT ---
+        // --- FIXED ROLE KEYS ---
+        const ADMIN_KEY = 'admin_system_key';
+        
+        // --- HARDCODED CONFIGURATION for GitHub Pages DEPLOYMENT (YOUR CONFIG) ---
         const YOUR_FIREBASE_CONFIG = {
             apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
             authDomain: "clinic-system-1579b.firebaseapp.com",
@@ -107,7 +110,7 @@
 
         // --- Firebase Core Logic ---
 
-        async function seedInitialData(adminUid) {
+        async function seedInitialData() {
             const rolesCollectionRef = collection(db, `artifacts/${appId}/public/data/roles`);
             const inventoryCollectionRef = collection(db, `artifacts/${appId}/public/data/inventory`);
             
@@ -116,11 +119,9 @@
             if (rolesSnapshot.empty) {
                 statusMessage.textContent = "Seeding initial roles and inventory (One-time setup)...";
 
-                // A. Seed Roles
-                // The current user's UID will be the Admin's UID.
+                // A. Seed Roles - Admin now uses a fixed key
                 const rolesData = [
-                    { uid: adminUid, role: "admin", name: "System Admin (Me)" },
-                    // Fixed UIDs for nurses to use as their login key
+                    { uid: ADMIN_KEY, role: "admin", name: "System Admin (Me)" },
                     { uid: `nurse_anne_margarette`, role: "nurse", name: "Anne Margarette" },
                     { uid: `nurse_ambe_ilona`, role: "nurse", name: "Ambe Ilona" },
                 ];
@@ -135,7 +136,7 @@
                     await setDoc(doc(inventoryCollectionRef, inventoryData[id].id), inventoryData[id]);
                 }
 
-                statusMessage.textContent = "Data seeding complete. Redirecting...";
+                statusMessage.textContent = "Data seeding complete. Please proceed to login.";
             }
         }
 
@@ -152,13 +153,14 @@
             }
 
             if (userRole) {
-                // Store the role and the *authenticated* UID for Firestore access, 
-                // but use the *checked* name for the role.
-                sessionStorage.setItem('clinic_user_id', authenticatedUserId); // Real Firebase UID
+                // Store the REAL Firebase UID for Firestore access/security checks, 
+                // and the validated user details for the application logic.
+                sessionStorage.setItem('clinic_auth_uid', authenticatedUserId); // Real Firebase UID
+                sessionStorage.setItem('clinic_user_key', cleanUid); // The key used for role lookup
                 sessionStorage.setItem('clinic_user_role', userRole);
                 sessionStorage.setItem('clinic_user_name', roleDoc.data().name);
                 
-                statusMessage.textContent = `Login successful. Redirecting as ${userRole.toUpperCase()}...`;
+                statusMessage.textContent = `Login successful. Redirecting as ${roleDoc.data().name.toUpperCase()}...`;
                 window.location.href = 'dashboard.html';
             } else {
                 errorMessage.textContent = `Error: User ID/Key "${cleanUid}" not found or not configured with a role (admin/nurse).`;
@@ -170,13 +172,10 @@
             errorMessage.classList.add('hidden');
             const enteredId = userIdInput.value;
             
-            if (enteredId.trim()) {
-                // Nurse login: use the entered key to check against seeded roles
-                checkUserRoleAndRedirect(enteredId);
-            } else {
-                // Admin login (no key entered): use the current authenticated anonymous UID
-                checkUserRoleAndRedirect(authenticatedUserId);
-            }
+            // If the input is empty, default to the fixed Admin key
+            const uidToCheck = enteredId.trim() ? enteredId : ADMIN_KEY;
+            
+            checkUserRoleAndRedirect(uidToCheck);
         }
 
         // --- Initialization ---
@@ -189,9 +188,12 @@
                 return;
             }
             
+            console.log("Using Firebase Config:", firebaseConfig);
+
             try {
+                // Initialize App and Services
                 const app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
+                auth = getAuth(app); 
                 db = getFirestore(app);
                 
                 // 1. Listen for Auth State Change
@@ -200,8 +202,8 @@
                         authenticatedUserId = user.uid; // Store the actual Firebase UID
                         statusMessage.textContent = `Authenticated (Ready to check ID).`;
                         
-                        // 2. Seed data: Use the Admin's real UID to seed the data on first run
-                        await seedInitialData(authenticatedUserId);
+                        // 2. Seed data: Run seeding logic
+                        await seedInitialData();
                         
                         loadingSpinner.classList.add('hidden');
                         loginForm.classList.remove('hidden');
@@ -221,7 +223,7 @@
                             }
                         } catch (e) {
                             console.error("Authentication failed:", e);
-                            errorMessage.textContent = `Authentication failed: ${e.message}`;
+                            errorMessage.textContent = `Authentication failed: ${e.message}. Please ensure Anonymous Sign-In is enabled in your Firebase Console.`;
                             errorMessage.classList.remove('hidden');
                             loadingSpinner.classList.add('hidden');
                         }
