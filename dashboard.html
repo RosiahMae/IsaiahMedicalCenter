@@ -107,8 +107,7 @@
             <span id="user-role-display" class="text-sm px-2 py-0.5 rounded-full bg-indigo-500 font-medium">Loading Role...</span>
         </div>
         <div class="flex items-center space-x-4">
-            <!-- Now shows the user's clinic key instead of the anonymous UID -->
-            <p id="user-key-display" class="text-sm font-mono bg-indigo-600 px-3 py-1 rounded-full shadow-md truncate" style="max-width: 150px;">Key: Loading...</p>
+            <p id="user-id-display" class="text-sm font-mono bg-indigo-600 px-3 py-1 rounded-full shadow-md truncate" style="max-width: 150px;">ID: Loading...</p>
             <button id="sign-out-btn" class="bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-1 px-3 rounded-lg transition duration-150 shadow-md">Sign Out</button>
         </div>
     </header>
@@ -131,7 +130,7 @@
                 <div class="dashboard-card p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow col-span-1 lg:col-span-2">
                     <h2 class="text-2xl font-bold text-gray-800 mb-4 flex items-center">
                         <svg class="w-6 h-6 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H9a1 1 0 01-1-1v-1a4 4 0 014-4h.01"></path></svg>
-                        Patient Queue & Status (Personal)
+                        Patient Queue & Status
                         <button onclick="showAddPatientModal()" class="ml-auto bg-green-500 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-green-600 transition duration-150 shadow-md">
                             Add Patient
                         </button>
@@ -170,13 +169,13 @@
                     <div class="mt-4">
                         <input type="text" id="new-item-name" placeholder="Item Name" class="w-full p-2 border border-gray-300 rounded-lg text-sm mb-2">
                         <input type="number" id="new-item-stock" placeholder="Stock" class="w-full p-2 border border-gray-300 rounded-lg text-sm mb-3">
-                        <button onclick="addInventoryItem()" class="w-full bg-indigo-500 text-white text-sm font-medium py-2 rounded-lg hover:bg-indigo-600 transition duration-150">Add/Update Item</button>
+                        <button onclick="addInventoryItem()" class="w-full bg-indigo-500 text-white text-sm font-medium py-2 rounded-lg hover:bg-indigo-600 transition duration-150">Add New Item</button>
                     </div>
 
                     <!-- User Role Management Section -->
-                    <h3 class="text-lg font-semibold text-gray-700 mt-6 mb-2 border-b pb-1">User Roles (Public Roles)</h3>
+                    <h3 class="text-lg font-semibold text-gray-700 mt-6 mb-2 border-b pb-1">User Roles (Admin)</h3>
                     <div id="user-role-management-list" class="space-y-3 max-h-40 overflow-y-auto custom-scrollbar">
-                        <p class="text-sm text-gray-500">Loading staff roles...</p>
+                        <p class="text-sm text-gray-500">Loading active users...</p>
                         <!-- User list will be injected here -->
                     </div>
 
@@ -232,43 +231,20 @@
     <!-- Firebase Imports and Logic -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc, deleteDoc, updateDoc, 
-            serverTimestamp
+            serverTimestamp, where
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
-        // Hardcoded Firebase Config (Fallback for local testing)
-        const HARDCODED_FIREBASE_CONFIG = {
-            apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
-            authDomain: "clinic-system-1579b.firebaseapp.com",
-            projectId: "clinic-system-1579b",
-            storageBucket: "clinic-system-1579b.firebasestorage.app",
-            messagingSenderId: "211282606869",
-            appId: "1:211282606869:web:853ddeee9ddba036b1c71c",
-            measurementId: "G-B2GSH85BMT"
-        };
+        // --- GLOBAL VARIABLES & INITIALIZATION ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
         
-        // --- GLOBAL VARIABLES & SESSION RETRIEVAL ---
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'clinic-default-app';
-        
-        // Load config from environment or use the hardcoded fallback
-        let firebaseConfig = HARDCODED_FIREBASE_CONFIG;
-        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-             try {
-                firebaseConfig = JSON.parse(__firebase_config);
-             } catch (e) {
-                console.warn("Could not parse environment __firebase_config, using hardcoded fallback.");
-             }
-        }
-
         let db, auth;
-        // Retrieve the authenticated user's details from sessionStorage (set by index.html)
-        const currentFirebaseUid = sessionStorage.getItem('clinic_auth_uid');
-        const currentUserKey = sessionStorage.getItem('clinic_user_key');
-        let currentUserRole = sessionStorage.getItem('clinic_user_role') || 'Unknown';
-        const currentUserName = sessionStorage.getItem('clinic_user_name') || 'Staff Member';
-
+        let currentUserId = null;
+        let currentUserRole = 'Staff'; // Default role
         let isAuthReady = false;
 
         // --- UI ELEMENTS ---
@@ -281,7 +257,7 @@
         const globalTaskList = document.getElementById('global-task-list');
         const consultationReportsList = document.getElementById('consultation-reports-list');
         const signOutBtn = document.getElementById('sign-out-btn');
-        const userKeyDisplay = document.getElementById('user-key-display'); // Updated ID
+        const userIdDisplay = document.getElementById('user-id-display');
         const userRoleDisplay = document.getElementById('user-role-display');
         const adminManagementCard = document.getElementById('admin-management-card');
         const addPatientModal = document.getElementById('add-patient-modal');
@@ -302,24 +278,22 @@
             }, duration);
         }
 
-        /** Checks session data. If invalid, redirects to login. */
+        /** Ensures user is logged in, otherwise redirects to login page. */
         function checkAuthAndRedirect() {
-            if (!currentFirebaseUid || !currentUserKey) {
-                console.error("Session key or UID missing. Redirecting.");
-                // Redirect only if Firebase is not yet initialized and session is invalid
-                if (!isAuthReady) {
-                    window.location.href = 'index.html';
-                }
-                return false;
+            // Note: This is a basic client-side check. Final Auth status is confirmed by onAuthStateChanged.
+            const user = auth?.currentUser;
+            if (!user && window.location.pathname.endsWith('/dashboard.html')) {
+                // If not logged in and on the dashboard, redirect to index.html
+                // This will be superseded by the onAuthStateChanged logic below, 
+                // but provides a fallback if the token is already expired.
             }
-            return true;
         }
 
         // --- FIREBASE PATH HELPERS ---
 
         /** Gets the path for the private collection of the current user. */
         const getUserPrivateCollectionPath = (collectionName) => 
-            `artifacts/${appId}/users/${currentFirebaseUid}/${collectionName}`;
+            `artifacts/${appId}/users/${currentUserId}/${collectionName}`;
 
         /** Gets the path for a public collection. */
         const getPublicCollectionPath = (collectionName) => 
@@ -328,12 +302,8 @@
         // --- AUTH AND INITIALIZATION ---
 
         async function initFirebase() {
-            // Check session before starting initialization
-            if (!checkAuthAndRedirect()) return;
-
-            // Check if we have a valid configuration object (either hardcoded or environment)
-            if (!firebaseConfig || !firebaseConfig.apiKey) {
-                errorText.textContent = "Firebase configuration is missing or invalid. Cannot initialize application.";
+            if (!firebaseConfig) {
+                errorText.textContent = "Firebase configuration is missing. Cannot initialize application.";
                 errorAlert.classList.remove('hidden');
                 loadingStatus.classList.add('hidden');
                 return;
@@ -343,22 +313,33 @@
                 const app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
-                isAuthReady = true;
 
-                // --- UI UPDATE BASED ON SESSION DATA ---
-                userKeyDisplay.textContent = `Key: ${currentUserKey}`;
-                userRoleDisplay.textContent = currentUserRole.toUpperCase();
-                adminManagementCard.classList.toggle('hidden', currentUserRole !== 'admin');
-                loadingStatus.classList.add('hidden');
-                dashboardContent.classList.remove('hidden');
-                // --- END UI UPDATE ---
+                // Start Authentication Process
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
 
-                startRealTimeListeners();
+                // Auth State Listener
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        currentUserId = user.uid;
+                        userIdDisplay.textContent = `ID: ${user.uid.substring(0, 8)}...`;
+                        isAuthReady = true;
+                        loadingStatus.classList.add('hidden');
+                        dashboardContent.classList.remove('hidden');
+                        
+                        // Start real-time listeners only once authenticated
+                        startRealTimeListeners();
+                    } else {
+                        // Not authenticated or signed out
+                        window.location.href = 'index.html';
+                    }
+                });
 
                 signOutBtn.addEventListener('click', async () => {
-                    // Firebase sign out is often optional if using anonymous auth, but good practice
-                    if(auth.currentUser) await signOut(auth); 
-                    sessionStorage.clear(); // Clear session data on sign out
+                    await signOut(auth);
                     window.location.href = 'index.html';
                 });
 
@@ -375,51 +356,81 @@
         function startRealTimeListeners() {
             if (!isAuthReady || !db) return;
 
-            // 1. Listen for Patients (Private Data)
-            // NOTE: Using the Firebase UID for the patient queue path
+            // 1. Listen for Current User's Role (Private Data)
+            onSnapshot(doc(db, getUserPrivateCollectionPath('roles'), currentUserId), (docSnapshot) => {
+                if (docSnapshot.exists()) {
+                    currentUserRole = docSnapshot.data().role || 'Staff';
+                } else {
+                    // Initialize user role if it doesn't exist (default to Staff)
+                    setDoc(doc(db, getUserPrivateCollectionPath('roles'), currentUserId), { role: 'Staff' });
+                    currentUserRole = 'Staff';
+                }
+                userRoleDisplay.textContent = currentUserRole;
+                // Show/Hide Admin Card based on role
+                adminManagementCard.classList.toggle('hidden', currentUserRole !== 'Admin');
+                alertBox(`Your role is set to: ${currentUserRole}`, 2000);
+                
+                // Also update User Role Management List (Admin only feature)
+                if (currentUserRole === 'Admin') {
+                    listenToAllUserRoles();
+                } else {
+                    document.getElementById('user-role-management-list').innerHTML = '<p class="text-sm text-gray-500">Feature disabled for Staff users.</p>';
+                }
+            });
+
+            // 2. Listen for Patients (Private Data)
             onSnapshot(collection(db, getUserPrivateCollectionPath('patients')), (snapshot) => {
                 const patients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 renderPatients(patients);
             }, (error) => console.error("Error listening to patients:", error));
 
-            // 2. Listen for Inventory (Public Data)
+            // 3. Listen for Inventory (Public Data)
             onSnapshot(collection(db, getPublicCollectionPath('inventory')), (snapshot) => {
                 const inventory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 renderInventory(inventory);
             }, (error) => console.error("Error listening to inventory:", error));
 
-            // 3. Listen for Global Tasks (Public Data)
+            // 4. Listen for Global Tasks (Public Data)
             onSnapshot(collection(db, getPublicCollectionPath('global_tasks')), (snapshot) => {
                 const tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 renderGlobalTasks(tasks);
             }, (error) => console.error("Error listening to tasks:", error));
 
-            // 4. Listen for Consultation Reports (Public Data)
+            // 5. Listen for Consultation Reports (Public Data)
             onSnapshot(collection(db, getPublicCollectionPath('consultation_reports')), (snapshot) => {
                 const reports = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 renderConsultationReports(reports);
             }, (error) => console.error("Error listening to reports:", error));
-            
-            // 5. Listen for ALL User Roles (Public Roles Collection) - For Admin management and UI refresh
-            listenToAllUserRoles();
         }
 
-        // 5. Listen for ALL User Roles (Public Roles Collection) - For Admin management
+        // 6. Listen for ALL User Roles (Admin only)
         function listenToAllUserRoles() {
-            const rolesCollectionPath = getPublicCollectionPath('roles');
-            onSnapshot(collection(db, rolesCollectionPath), (snapshot) => {
+            // Note: This listens to the *public* artifact space to find all users who have an entry.
+            // This is an imperfect but pragmatic way to list other users in a multi-user environment.
+            const userRolesPath = `artifacts/${appId}/users`;
+            onSnapshot(collection(db, userRolesPath), async (snapshot) => {
                 const userListContainer = document.getElementById('user-role-management-list');
                 userListContainer.innerHTML = '';
                 
                 if (snapshot.docs.length === 0) {
-                    userListContainer.innerHTML = '<p class="text-sm text-gray-500">No staff roles configured.</p>';
+                    userListContainer.innerHTML = '<p class="text-sm text-gray-500">No other users found.</p>';
                     return;
                 }
 
-                snapshot.docs.forEach(doc => {
-                    const roleData = doc.data();
-                    const userKey = doc.id; // User key is the document ID
-                    renderUserRoleItem(userKey, roleData.role, roleData.name);
+                snapshot.forEach(async (userDoc) => {
+                    const userId = userDoc.id; // This is the user ID
+
+                    // Fetch the actual role document inside the user's private space
+                    // Path: artifacts/{appId}/users/{userId}/roles/{userId}
+                    const roleDocRef = doc(db, getUserPrivateCollectionPath('roles').replace(currentUserId, userId), userId);
+                    
+                    try {
+                        const roleSnapshot = await getDoc(roleDocRef);
+                        const role = roleSnapshot.exists() ? roleSnapshot.data().role : 'Staff';
+                        renderUserRoleItem(userId, role);
+                    } catch (e) {
+                        console.error(`Could not fetch role for user ${userId}:`, e);
+                    }
                 });
 
             }, (error) => console.error("Error listening to user roles:", error));
@@ -477,19 +488,17 @@
             }
             
             inventory.sort((a, b) => a.name.localeCompare(b.name)).forEach(item => {
-                // Use 'quantity' field from index.html seeding
-                const stock = item.quantity || 0;
-                const stockColor = stock < 10 ? 'text-red-600 font-bold' : 'text-green-600';
+                const stockColor = item.stock < 10 ? 'text-red-600 font-bold' : 'text-green-600';
                 const itemDiv = document.createElement('div');
                 itemDiv.className = 'flex items-center justify-between p-2 bg-gray-50 rounded-lg shadow-sm';
                 itemDiv.innerHTML = `
                     <span class="text-sm text-gray-700 font-medium">${item.name}</span>
                     <div class="flex items-center space-x-2">
-                        <span class="text-xs ${stockColor}">Stock: ${stock} ${item.unit || ''}</span>
-                        <button onclick="updateInventory('${item.id}', ${stock - 1})" class="text-red-500 hover:text-red-700 text-xs font-semibold" title="Decrement Stock" ${stock <= 0 ? 'disabled' : ''}>
+                        <span class="text-xs ${stockColor}">Stock: ${item.stock}</span>
+                        <button onclick="updateInventory('${item.id}', ${item.stock - 1})" class="text-red-500 hover:text-red-700 text-xs font-semibold" title="Decrement Stock" ${item.stock <= 0 ? 'disabled' : ''}>
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                         </button>
-                        <button onclick="updateInventory('${item.id}', ${stock + 1})" class="text-green-500 hover:text-green-700 text-xs font-semibold" title="Increment Stock">
+                        <button onclick="updateInventory('${item.id}', ${item.stock + 1})" class="text-green-500 hover:text-green-700 text-xs font-semibold" title="Increment Stock">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                         </button>
                     </div>
@@ -512,7 +521,7 @@
                 taskDiv.innerHTML = `
                     <p class="text-sm text-gray-700 flex-grow mr-4">${task.text}</p>
                     <div class="flex-shrink-0 flex items-center space-x-2">
-                        <span class="text-xs text-gray-400">By ${task.filerKey.substring(0, 4)}... on ${date}</span>
+                        <span class="text-xs text-gray-400">${date}</span>
                         <button onclick="deleteGlobalTask('${task.id}')" class="text-red-400 hover:text-red-600 transition duration-150" title="Delete Task">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                         </button>
@@ -537,9 +546,9 @@
                     <div>
                         <p class="font-semibold text-gray-800">${report.patientName} <span class="text-xs text-gray-500 ml-2">(${report.diagnosis})</span></p>
                         <p class="text-sm text-gray-600 italic truncate" title="${report.notes}">${report.notes}</p>
-                        <p class="text-xs text-gray-400">Filed by: ${report.filerKey} on ${date}</p>
+                        <p class="text-xs text-gray-400">Filed by: ${report.filerId.substring(0, 4)}... on ${date}</p>
                     </div>
-                    ${currentUserRole === 'admin' ? `
+                    ${currentUserRole === 'Admin' ? `
                         <button onclick="deleteConsultationReport('${report.id}')" class="text-red-400 hover:text-red-600 transition duration-150 ml-4" title="Delete Report (Admin)">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                         </button>
@@ -549,27 +558,23 @@
             });
         }
 
-        function renderUserRoleItem(userKey, role, name) {
+        function renderUserRoleItem(userId, role) {
             const userListContainer = document.getElementById('user-role-management-list');
             const itemDiv = document.createElement('div');
             itemDiv.className = 'flex items-center justify-between p-2 bg-white rounded-lg shadow-sm border border-gray-200';
-            const isCurrentUser = userKey === currentUserKey;
-            
-            const displayRole = role.charAt(0).toUpperCase() + role.slice(1);
+            const isCurrentUser = userId === currentUserId;
             
             itemDiv.innerHTML = `
-                <span class="text-sm font-semibold truncate" title="${userKey}" style="max-width: 150px;">
-                    ${name} (${isCurrentUser ? 'You' : userKey})
-                </span>
+                <span class="text-sm font-mono truncate" title="${userId}" style="max-width: 150px;">${isCurrentUser ? 'You (Self)' : userId.substring(0, 8) + '...'}</span>
                 <div class="flex items-center space-x-2">
-                    <span class="text-xs font-semibold ${role === 'admin' ? 'text-indigo-600' : 'text-gray-600'}">${displayRole}</span>
+                    <span class="text-xs font-semibold ${role === 'Admin' ? 'text-indigo-600' : 'text-gray-600'}">${role}</span>
                     <select 
-                        onchange="updateUserRole('${userKey}', this.value)" 
+                        onchange="updateUserRole('${userId}', this.value)" 
                         class="bg-white border border-gray-300 text-gray-700 py-1 px-2 rounded-lg text-xs shadow-sm"
-                        ${isCurrentUser || currentUserRole !== 'admin' ? 'disabled' : ''}
+                        ${isCurrentUser ? 'disabled' : ''}
                     >
-                        <option value="nurse" ${role === 'nurse' ? 'selected' : ''}>Nurse</option>
-                        <option value="admin" ${role === 'admin' ? 'selected' : ''}>Admin</option>
+                        <option value="Staff" ${role === 'Staff' ? 'selected' : ''}>Staff</option>
+                        <option value="Admin" ${role === 'Admin' ? 'selected' : ''}>Admin</option>
                     </select>
                 </div>
             `;
@@ -604,14 +609,13 @@
             }
 
             try {
-                // Patient queue is private, indexed by the Firebase UID
                 await addDoc(collection(db, getUserPrivateCollectionPath('patients')), {
                     name,
                     age,
                     complaint,
                     status: 'Waiting',
                     checkIn: serverTimestamp(),
-                    filerKey: currentUserKey // Use the logical clinic key for tracking staff activity
+                    filerId: currentUserId
                 });
                 alertBox(`${name} added to the queue!`, 2000);
             } catch (e) {
@@ -623,7 +627,6 @@
         async function updatePatientStatus(patientId, newStatus) {
             if (!db) return;
             try {
-                // Patient queue is private, indexed by the Firebase UID
                 const docRef = doc(db, getUserPrivateCollectionPath('patients'), patientId);
                 await updateDoc(docRef, { status: newStatus });
                 alertBox(`Patient status updated to ${newStatus}.`, 2000);
@@ -644,14 +647,10 @@
             }
 
             try {
-                // Use a normalized name as the document ID for easy lookup and uniqueness
-                const itemId = name.toLowerCase().replace(/\s/g, '-').replace(/[^a-z0-9-]/g, '');
-                
-                await setDoc(doc(db, getPublicCollectionPath('inventory'), itemId), {
+                await setDoc(doc(db, getPublicCollectionPath('inventory'), name.toLowerCase().replace(/\s/g, '-')), {
                     name: name,
-                    quantity: stock // Use quantity to match index.html seeding
-                }, { merge: true }); // Use merge to update existing items easily
-                
+                    stock: stock
+                });
                 document.getElementById('new-item-name').value = '';
                 document.getElementById('new-item-stock').value = '';
                 alertBox(`${name} inventory item added/updated.`, 2000);
@@ -665,7 +664,7 @@
             if (!db || newStock < 0) return;
             try {
                 const docRef = doc(db, getPublicCollectionPath('inventory'), itemId);
-                await updateDoc(docRef, { quantity: newStock }); // Use quantity to match index.html seeding
+                await updateDoc(docRef, { stock: newStock });
             } catch (e) {
                 console.error("Error updating inventory:", e);
                 alertBox(`Failed to update inventory: ${e.message}`, 4000);
@@ -681,7 +680,7 @@
                 await addDoc(collection(db, getPublicCollectionPath('global_tasks')), {
                     text,
                     timestamp: serverTimestamp(),
-                    filerKey: currentUserKey // Use the logical clinic key
+                    filerId: currentUserId
                 });
                 document.getElementById('new-global-task-text').value = '';
                 alertBox("New global task added!", 2000);
@@ -739,10 +738,10 @@
                     diagnosis,
                     notes,
                     timestamp: serverTimestamp(),
-                    filerKey: currentUserKey // Use the logical clinic key
+                    filerId: currentUserId
                 });
                 
-                // Set patient status to Discharged after filing report (private data)
+                // Set patient status to Discharged after filing report (optional, but good workflow)
                 const patientDocRef = doc(db, getUserPrivateCollectionPath('patients'), patientId);
                 await updateDoc(patientDocRef, { status: 'Discharged' });
 
@@ -754,8 +753,8 @@
         }
 
         async function deleteConsultationReport(reportId) {
-            if (!db || currentUserRole !== 'admin') {
-                alertBox("Access Denied: Only Admin users can delete reports.", 2000);
+            if (!db || currentUserRole !== 'Admin') {
+                alertBox("Only Admin users can delete reports.", 2000);
                 return;
             }
             try {
@@ -770,28 +769,23 @@
 
 
         // User Role Management (Admin only)
-        async function updateUserRole(userKey, newRole) {
-            if (!db || currentUserRole !== 'admin') {
-                alertBox("Access Denied: Only Admin can change staff roles.", 2000);
+        async function updateUserRole(userId, newRole) {
+            if (!db || currentUserRole !== 'Admin') {
+                alertBox("Access Denied: Only Admin can change user roles.", 2000);
                 return;
             }
-            if (userKey === currentUserKey) {
+            if (userId === currentUserId) {
                 alertBox("You cannot change your own role.", 2000);
                 return;
             }
             
             try {
-                // Role document is stored in the public collection, indexed by the user key
-                const roleDocRef = doc(db, getPublicCollectionPath('roles'), userKey);
-                await updateDoc(roleDocRef, { role: newRole });
-                alertBox(`Role for staff key ${userKey} updated to ${newRole.toUpperCase()}.`, 3000);
-                
-                // Note: The UI for the current user's role (top right) will only refresh
-                // after the current user logs out and logs back in to update sessionStorage,
-                // but the change is immediately reflected in the public list below.
-
+                // Path: artifacts/{appId}/users/{userId}/roles/{userId}
+                const roleDocRef = doc(db, getUserPrivateCollectionPath('roles').replace(currentUserId, userId), userId);
+                await setDoc(roleDocRef, { role: newRole }, { merge: true });
+                alertBox(`Role for user ${userId.substring(0, 4)}... updated to ${newRole}.`, 3000);
             } catch (e) {
-                console.error("Error updating staff role:", e);
+                console.error("Error updating user role:", e);
                 alertBox(`Failed to update role: ${e.message}`, 4000);
             }
         }
@@ -830,7 +824,10 @@
             }
         });
 
-        // Initialize Firebase and listeners on window load
+        // 1. Initial Auth Check (before Firebase is even initialized)
+        checkAuthAndRedirect(); // This is just a quick pre-check
+
+        // 2. Initialize Firebase and listeners on window load
         window.onload = initFirebase;
     </script>
 </body>
