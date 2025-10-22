@@ -140,7 +140,8 @@
     <!-- Firebase Imports and Logic -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // NOTE: Added signInAnonymously and signInWithCustomToken to imports
+        import { getAuth, signOut, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, query, onSnapshot, doc, updateDoc, addDoc, serverTimestamp, deleteDoc, getDocs, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // IMPORTANT: Enable Firestore debug logs to trace connection issues.
@@ -188,8 +189,8 @@
         // --- UTILITIES ---
 
         function checkAuthAndRedirect() {
+            // Only redirect if session data is completely missing.
             if (!authData.role || !authData.uid) {
-                // Not authenticated or session expired. Redirect to login.
                 window.location.href = 'index.html';
             }
         }
@@ -224,8 +225,9 @@
 
         // --- FIREBASE INITIALIZATION & LISTENERS ---
 
-        function initFirebase() {
+        async function initFirebase() {
             try {
+                // 1. Check Config
                 if (Object.keys(firebaseConfig).length === 0 || !firebaseConfig.apiKey) {
                     throw new Error("Firebase configuration is missing or empty.");
                 }
@@ -234,10 +236,29 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                // Start data fetching
+                // 2. MANDATORY AUTHENTICATION: Sign in using the custom token
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    // Fallback to anonymous sign-in if token is missing (though it shouldn't be)
+                    await signInAnonymously(auth);
+                }
+
+                // 3. Update UID in session and state after successful sign-in
+                if (auth.currentUser) {
+                    authData.uid = auth.currentUser.uid;
+                    sessionStorage.setItem('clinic_auth_uid', authData.uid);
+                    console.log(`Firebase: Successfully authenticated with UID: ${authData.uid}`);
+                } else {
+                    throw new Error("Authentication failed after token check.");
+                }
+                
+                // 4. Start Data Fetching
                 startDataListeners();
                 
-                // Show content now that Firebase is initialized and data fetching has started
+                // 5. Render UI
                 document.getElementById('loading').classList.add('hidden');
                 document.getElementById('content').classList.remove('hidden');
                 render();
@@ -490,7 +511,7 @@
                 closeAddPatientModal();
             } catch (e) {
                 console.error("Failed to add new patient:", e);
-                window.alertBox(`Failed to register patient. Error: ${e.message}. Check console for 'Firestore permission denied'.`, 'error');
+                window.alertBox(`Failed to register patient. Error: ${e.message}. The database write may have been blocked by security rules.`, 'error');
             }
         }
         
@@ -571,7 +592,7 @@
                 closeConsultationModal();
             } catch (e) {
                 console.error("Failed to submit report:", e);
-                window.alertBox(`Failed to submit report. Error: ${e.message}. Check console for 'Firestore permission denied'.`, 'error');
+                window.alertBox(`Failed to submit report. Error: ${e.message}. The database write may have been blocked by security rules.`, 'error');
             }
         }
 
@@ -879,7 +900,7 @@
         // --- MAIN RENDER LOOP ---
 
         function render() {
-            checkAuthAndRedirect();
+            // checkAuthAndRedirect() is called on load before initFirebase
             
             const contentDiv = document.getElementById('content');
             
@@ -918,16 +939,17 @@
         // Patient Management
         window.showAddPatientModal = showAddPatientModal;
         window.closeAddPatientModal = closeAddPatientModal;
+        window.addNewPatient = addNewPatient;
         
         // Consultation Report Management 
         window.showConsultationModal = showConsultationModal;
         window.closeConsultationModal = closeConsultationModal;
-        
+        window.submitConsultationReport = submitConsultationReport;
+
         // Listen for form submissions
         document.addEventListener('DOMContentLoaded', () => {
             const addPatientForm = document.getElementById('add-patient-form');
             if (addPatientForm) {
-                // IMPORTANT: Use addNewPatient without exposing to window scope if you want to avoid global namespace pollution, but here we expose it to be safe for HTML events.
                 addPatientForm.addEventListener('submit', window.addNewPatient);
             }
             
@@ -940,7 +962,7 @@
         // 1. Initial Auth Check (before Firebase is even initialized)
         checkAuthAndRedirect(); 
 
-        // 2. Initialize Firebase and listeners on window load
+        // 2. Initialize Firebase and listeners on window load (now async)
         window.onload = initFirebase;
     </script>
 </body>
