@@ -24,10 +24,17 @@
         </div>
         
         <div id="login-form" class="hidden">
-            <h2 class="text-xl font-semibold text-gray-700 mb-4">Welcome Back</h2>
+            <h2 class="text-xl font-semibold text-gray-700 mb-4">Role Verification</h2>
             <p class="text-sm text-gray-500 mb-4">
-                You are currently signed in with a temporary ID. We will check your role in the database.
+                Enter your unique User ID/Key or leave blank if you are the System Admin using your primary device.
             </p>
+            
+            <div class="mb-4">
+                <label for="user-id-input" class="block text-sm font-medium text-gray-700">User ID/Key (e.g., nurse_anne_margarette)</label>
+                <input type="text" id="user-id-input" placeholder="Optional for Admin. Required for Nurses."
+                    class="mt-1 block w-full border border-gray-300 rounded-lg shadow-sm p-3 focus:ring-indigo-500 focus:border-indigo-500">
+            </div>
+
             <button id="login-button" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-lg shadow-md transition-colors duration-200">
                 Proceed to Dashboard
             </button>
@@ -42,7 +49,6 @@
         import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- HARDCODED CONFIGURATION for GitHub Pages DEPLOYMENT ---
-        // These values are required for the app to run outside the Canvas environment.
         const YOUR_FIREBASE_CONFIG = {
             apiKey: "AIzaSyBMuundp1Kc1P9Ear0_akWTzUIS3slPizI",
             authDomain: "clinic-system-1579b.firebaseapp.com",
@@ -55,7 +61,6 @@
         
         // Global variables provided by the Canvas environment
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'clinic-default-app';
-        // Use environment config if available (Canvas), otherwise use the hardcoded one (GitHub Pages)
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : YOUR_FIREBASE_CONFIG; 
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
@@ -64,10 +69,11 @@
         const loginForm = document.getElementById('login-form');
         const errorMessage = document.getElementById('error-message');
         const loginButton = document.getElementById('login-button');
+        const userIdInput = document.getElementById('user-id-input');
 
         let db = null;
         let auth = null;
-        let currentUserId = null;
+        let authenticatedUserId = null; // The UID from the current Firebase session
 
         // --- Utility Functions ---
 
@@ -114,7 +120,7 @@
                 // The current user's UID will be the Admin's UID.
                 const rolesData = [
                     { uid: adminUid, role: "admin", name: "System Admin (Me)" },
-                    // Placeholder UIDs for nurses (needed since they don't have a token to log in with yet)
+                    // Fixed UIDs for nurses to use as their login key
                     { uid: `nurse_anne_margarette`, role: "nurse", name: "Anne Margarette" },
                     { uid: `nurse_ambe_ilona`, role: "nurse", name: "Ambe Ilona" },
                 ];
@@ -133,8 +139,11 @@
             }
         }
 
-        async function checkUserRoleAndRedirect(uid) {
-            const roleDocRef = doc(db, `artifacts/${appId}/public/data/roles`, uid);
+        async function checkUserRoleAndRedirect(uidToCheck) {
+            // Trim and sanitize the input ID
+            const cleanUid = uidToCheck.trim().toLowerCase();
+
+            const roleDocRef = doc(db, `artifacts/${appId}/public/data/roles`, cleanUid);
             const roleDoc = await getDoc(roleDocRef);
 
             let userRole = null;
@@ -143,25 +152,36 @@
             }
 
             if (userRole) {
-                // Store the role and UID in session storage for dashboard.html
-                sessionStorage.setItem('clinic_user_id', uid);
+                // Store the role and the *authenticated* UID for Firestore access, 
+                // but use the *checked* name for the role.
+                sessionStorage.setItem('clinic_user_id', authenticatedUserId); // Real Firebase UID
                 sessionStorage.setItem('clinic_user_role', userRole);
+                sessionStorage.setItem('clinic_user_name', roleDoc.data().name);
                 
                 statusMessage.textContent = `Login successful. Redirecting as ${userRole.toUpperCase()}...`;
                 window.location.href = 'dashboard.html';
             } else {
-                // If the user logs in anonymously (GitHub Pages default) and doesn't have a seeded role,
-                // we tell them they need to be configured.
-                errorMessage.textContent = 'Error: Your user ID is not configured with a role (admin/nurse). Please contact the System Admin.';
+                errorMessage.textContent = `Error: User ID/Key "${cleanUid}" not found or not configured with a role (admin/nurse).`;
                 errorMessage.classList.remove('hidden');
-                loadingSpinner.classList.add('hidden');
+            }
+        }
+        
+        function handleLoginAttempt() {
+            errorMessage.classList.add('hidden');
+            const enteredId = userIdInput.value;
+            
+            if (enteredId.trim()) {
+                // Nurse login: use the entered key to check against seeded roles
+                checkUserRoleAndRedirect(enteredId);
+            } else {
+                // Admin login (no key entered): use the current authenticated anonymous UID
+                checkUserRoleAndRedirect(authenticatedUserId);
             }
         }
 
         // --- Initialization ---
 
         function initFirebase() {
-            // After hardcoding, this check is now mostly for safety, but it won't be null on GitHub Pages
             if (!firebaseConfig) {
                 errorMessage.textContent = "Error: Firebase configuration not found.";
                 errorMessage.classList.remove('hidden');
@@ -177,16 +197,17 @@
                 // 1. Listen for Auth State Change
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
-                        currentUserId = user.uid;
-                        statusMessage.textContent = `Authenticated with ID: ${currentUserId}. Checking roles...`;
+                        authenticatedUserId = user.uid; // Store the actual Firebase UID
+                        statusMessage.textContent = `Authenticated (Ready to check ID).`;
                         
-                        // 2. Seed data and check role
-                        await seedInitialData(currentUserId);
+                        // 2. Seed data: Use the Admin's real UID to seed the data on first run
+                        await seedInitialData(authenticatedUserId);
                         
                         loadingSpinner.classList.add('hidden');
                         loginForm.classList.remove('hidden');
                         
-                        loginButton.onclick = () => checkUserRoleAndRedirect(currentUserId);
+                        // 3. Attach the new login handler
+                        loginButton.onclick = handleLoginAttempt;
                         
                     } else {
                         statusMessage.textContent = "Attempting sign-in...";
@@ -196,7 +217,6 @@
                             if (initialAuthToken) {
                                 await signInWithCustomToken(auth, initialAuthToken);
                             } else {
-                                // This is the path taken on GitHub Pages, granting an anonymous UID
                                 await signInAnonymously(auth);
                             }
                         } catch (e) {
